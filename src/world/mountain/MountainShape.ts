@@ -203,14 +203,17 @@ export class MountainShape {
 	readonly path: MountainPath;
 	/** Где на тропе (s) кончаются участки — там костры; последний — на вершине. */
 	readonly legEnds: number[];
+	/** Где на тропе (s) первые развороты (до второго костра) — туда ведёт маркер, чтобы не потерять тропу. */
+	readonly turns: number[];
 	readonly gullies: Gully[] = [];
 	readonly sites: Site[] = [];
 	private readonly noise: Noise2D;
 
 	constructor(seed: number) {
 		this.noise = createNoise2D(createRng(seed));
-		const { points, legEnds } = buildPath();
+		const { points, legEnds, turns } = buildPath();
 		this.legEnds = legEnds;
+		this.turns = turns;
 		this._followRelief(points);
 		this.path = new MountainPath(points);
 
@@ -369,7 +372,7 @@ function profileSlope(r: number): number {
  * ущелье; зигзаги и траверс дальше через второе; зигзаги к вершине (посередине — ещё костёр). Потом сглаживаем
  * углы (развороты становятся петлями) и ставим высоту по профилю.
  */
-function buildPath(): { points: PathPoint[]; legEnds: number[] } {
+function buildPath(): { points: PathPoint[]; legEnds: number[]; turns: number[] } {
 	let r = PATH_START_RADIUS;
 	let th = 0;
 	const plan: { r: number; th: number }[] = [{ r, th }];
@@ -393,9 +396,13 @@ function buildPath(): { points: PathPoint[]; legEnds: number[] } {
 		}
 	};
 	const fire = () => fireIndex.push(plan.length - 1);
+	const turnIndex: number[] = [];
+	const turn = () => turnIndex.push(plan.length - 1);
 
 	leg(0.14);
+	turn();
 	leg(-0.14);
+	turn();
 	leg(0.1);
 	fire();
 	leg(1.3);
@@ -433,5 +440,5 @@ function buildPath(): { points: PathPoint[]; legEnds: number[] } {
 		points.push({ x: xs[i], y: profileHeight(Math.hypot(xs[i], zs[i])), z: zs[i], s });
 	}
 	const legEnds = [...fireIndex.map((i) => points[i].s), s];
-	return { points, legEnds };
+	return { points, legEnds, turns: turnIndex.map((i) => points[i].s) };
 }

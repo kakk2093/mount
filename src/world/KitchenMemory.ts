@@ -305,7 +305,7 @@ export class KitchenMemory implements Level {
 
 	/**
 	 * Концовка: на столе — упавшая бутылка и лужа (как в конце грустной кухни), рюмка пустая. Сзади, у двери, —
-	 * человек в петле (всё чёрное, стрижен под машинку, усы), раскачивается; под ним — опрокинутый табурет.
+	 * человек в петле (всё чёрное, лысый, с усами), раскачивается; под ним — опрокинутый табурет.
 	 */
 	private _buildEnding(): void {
 		const angle = Math.PI / 2;
@@ -328,8 +328,6 @@ export class KitchenMemory implements Level {
 			pants: '#141416',
 			boots: '#0e0e10',
 			skin: '#f0c090',
-			hair: '#3a2a20',
-			buzz: true,
 			mustache: '#3a2a20',
 			eyes: '#1a1a1a',
 		});

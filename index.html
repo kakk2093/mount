@@ -21,7 +21,7 @@
 		#flash {
 			position: fixed; inset: 0; opacity: 0; pointer-events: none; z-index: 8;
 		}
-		/* Стартовый экран — поверх заливки: «Надень наушники» и кнопка «Старт». */
+		/* Стартовый экран — поверх заливки: «Надень наушники» и ОК, потом подтверждение и «Старт». */
 		#start {
 			position: fixed; inset: 0; z-index: 9; display: flex; flex-direction: column;
 			align-items: center; justify-content: center; gap: 28px; color: #e8dcc0;
@@ -34,6 +34,14 @@
 		}
 		#start button:hover { background: #fff3d6; }
 		#start button:active { transform: translateY(4px); box-shadow: 0 2px 0 #6d6553; }
+		#start .step { display: flex; flex-direction: column; align-items: center; gap: 28px; }
+		#start .step[hidden] { display: none; }
+		/* Второй шаг: подтверждение — крупно и мягко проявляется. */
+		#sure {
+			max-width: 900px; font: 800 40px system-ui, sans-serif; line-height: 1.25; color: #ffe2a0;
+			text-shadow: 0 0 12px rgba(255, 190, 90, 0.7); animation: hp-appear 0.8s cubic-bezier(.2,1.4,.4,1) both;
+		}
+		@media (max-width: 600px) { #sure { font-size: 26px; } }
 		/* «Надень наушники» — главное на экране: крупно, тёплым светом, пульсирует; значок наушников покачивается
 		   в такт, будто играет музыка; вся надпись въезжает при появлении. */
 		#headphones {
@@ -68,9 +76,22 @@
 <body>
 	<div id="hint" style="display: none"></div>
 	<div id="start">
-		<div id="headphones"><span class="icon">🎧</span><span class="text">Надень наушники</span></div>
-		<button id="start-button" type="button">СТАРТ</button>
+		<!-- Два шага: сначала «Надень наушники» и ОК, потом — подтверждение и СТАРТ (его ловит Game). -->
+		<div class="step" id="step-headphones">
+			<div id="headphones"><span class="icon">🎧</span><span class="text">Надень наушники</span></div>
+			<button id="ok-button" type="button">ОК</button>
+		</div>
+		<div class="step" id="step-start" hidden>
+			<div id="sure">ЕСЛИ ТЫ УВЕРЕН, ЧТО НАДЕЛ НАУШНИКИ, ЖМИ СТАРТ</div>
+			<button id="start-button" type="button">СТАРТ</button>
+		</div>
 	</div>
+	<script>
+		document.getElementById('ok-button').addEventListener('click', () => {
+			document.getElementById('step-headphones').hidden = true;
+			document.getElementById('step-start').hidden = false;
+		});
+	</script>
 	<div id="prompt"></div>
 	<div id="flash" style="opacity: 1; background: #111"></div>
 	<script type="module" src="/src/main.ts"></script>

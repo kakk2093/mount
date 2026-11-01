@@ -53,6 +53,8 @@ const FIRE_SPAWN_PITCH = -0.26;
 const BRIDGE_LANDING = 2.5;
 /** Финал — когда игрок подошёл к концу тропы (смотровая на вершине) ближе этого, м. */
 const SUMMIT_REACH = 2.5;
+/** Маркер разворота засчитан, когда подошли ближе этого, м. */
+const TURN_REACH = 6;
 /** Для проверки: начать у костра с этим номером (0 — в лагере), разговор с путником уже был; null — обычный старт. */
 const DEBUG_START_FIRE: number | null = null;
 /** Финал: сколько смотрим на восход (солнце поднимается, небо светлеет), сколько летим к солнцу, с;
@@ -252,6 +254,9 @@ export class Mountain implements Level {
 	private talked = false;
 	/** Следующий костёр, у которого сесть (0 — в лагере); больше числа костров — всё. */
 	private nextFire = 0;
+	/** Маркеры на первых разворотах тропы (по пути ко второму костру) и сколько из них уже пройдено. */
+	private readonly turnMarks: THREE.Vector3[] = [];
+	private turnsPassed = 0;
 	private time = 0;
 	/** Высота игрока 0..1 (подножие..вершина) — по ней погода и музыка. */
 	private altitude = 0;
@@ -314,6 +319,11 @@ export class Mountain implements Level {
 			this._addFireInteraction(i);
 		}
 		this.snowStopY = this.fires[this.fires.length - 1].group.position.y + SNOW_STOP_ABOVE;
+		for (const s of shape.turns) {
+			const mark = shape.path.pointAt(s, new THREE.Vector3());
+			mark.y = this.getHeightAt(mark.x, mark.z) + 1.5;
+			this.turnMarks.push(mark);
+		}
 		shape.path.pointAt(shape.path.length, this.summit);
 		this.summit.y = this.getHeightAt(this.summit.x, this.summit.z) + 1.5;
 		this._addTraveler(camp.x + 1.6, camp.z);
@@ -376,6 +386,9 @@ export class Mountain implements Level {
 		}
 		this.fireSound.update(nearest);
 		this.traveler.update(this.time, dt);
+		// Дошли до разворота — маркер переходит на следующий.
+		const mark = this.turnMarks[this.turnsPassed];
+		if (this.nextFire === 1 && mark && Math.hypot(player.x - mark.x, player.z - mark.z) < TURN_REACH) this.turnsPassed++;
 		// Дошли до смотровой (после всех костров) — финал: задачи больше нет, музыка в полную силу.
 		if (!this.finale && this.nextFire >= this.fires.length && Math.hypot(player.x - this.summit.x, player.z - this.summit.z) < SUMMIT_REACH) {
 			this.finale = true;
@@ -460,6 +473,8 @@ export class Mountain implements Level {
 
 	objectiveTarget(): THREE.Vector3 | null {
 		if (!this.talked) return this.travelerHead;
+		// Ко второму костру — сначала через развороты тропы (иначе легко уйти не туда).
+		if (this.nextFire === 1 && this.turnsPassed < this.turnMarks.length) return this.turnMarks[this.turnsPassed];
 		if (this.nextFire < this.fires.length) return this.fires[this.nextFire].flame;
 		return this.finale ? null : this.summit;
 	}

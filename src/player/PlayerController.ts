@@ -4,7 +4,7 @@ import type { Colliders } from '../physics/Colliders.js';
 
 const WALK_SPEED = 3.3;
 /** Бег, м/с. */
-const SPRINT_SPEED = 4.5;
+const SPRINT_SPEED = 6;
 const EYE_HEIGHT = 1.7;
 const RADIUS = 0.35;
 const GRAVITY = 20;
