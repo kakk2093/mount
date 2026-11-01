@@ -370,6 +370,8 @@ export class OfficeMemory implements Level {
 
 	/** Пора выпить кофе: каждые COFFEE_EVERY «поработать» (пока игра не готова). */
 	private _needsCoffee(): boolean {
+		// В распаде кофе нет — только работа.
+		if (this.decay) return false;
 		return this.work < this.total && this.coffees < Math.floor(this.work / COFFEE_EVERY);
 	}
 

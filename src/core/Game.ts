@@ -11,7 +11,7 @@ import { Letterbox, LETTERBOX_SLIDE_TIME } from '../ui/Letterbox.js';
 import { ObjectiveHud } from '../ui/ObjectiveHud.js';
 import { TargetMarker } from '../ui/TargetMarker.js';
 import { ProgressBar } from '../ui/ProgressBar.js';
-import type { Level, LevelHost, SpawnPoint } from '../world/Level.js';
+import type { Level, LevelHost, SpawnPoint, Transition } from '../world/Level.js';
 import { Mountain } from '../world/mountain/Mountain.js';
 import { KitchenMemory } from '../world/KitchenMemory.js';
 import { CprMemory } from '../world/CprMemory.js';
@@ -36,7 +36,9 @@ const VOICE_PITCH: Record<Voice, number> = { player: 170, npc: 260, low: 120, hi
 const GLITCH_TIME = 0.4;
 /** Настроение музыки, если уровень своего не задал. */
 /** Для проверки: начать сразу с воспоминания (без вступления; после него — на гору); null — обычный старт. */
-const START_MEMORY: 'cpr' | 'kitchen' | 'office' | 'decay' | null = 'decay';
+const START_MEMORY: 'cpr' | 'kitchen' | 'office' | 'decay' | 'sad' | 'ending' | null = null;
+/** Конец игры: за сколько секунд экран уходит в чёрное. */
+const END_FADE = 3;
 const DEFAULT_MOOD: MusicMood = { volume: 1, brightness: 0.4 };
 /** Мысли героя на старте — когда сошла заливка. */
 const INTRO: Dialogue = {
@@ -76,7 +78,6 @@ export class Game implements LevelHost {
 	private glitchTime: number | null = null;
 	private readonly hint = document.getElementById('hint')!;
 	private readonly prompt = document.getElementById('prompt')!;
-	private readonly crosshair = document.getElementById('crosshair')!;
 	private readonly flash = document.getElementById('flash')!;
 	/** Время с начала перехода; null — перехода нет. */
 	private flashTime: number | null = null;
@@ -86,6 +87,13 @@ export class Game implements LevelHost {
 	private started = false;
 	/** Мысли героя на старте ещё не звучали: начнутся, как только сойдёт заливка. */
 	private introPending = START_MEMORY === null;
+	/** Сколько секунд идёт затемнение конца игры (null — игра идёт). */
+	private endTime: number | null = null;
+	private readonly endTitle = document.createElement('div');
+	/** Длительности текущей заливки (см. beginTransition). */
+	private flashIn = FLASH_IN;
+	private flashHold = FLASH_HOLD;
+	private flashOut = FLASH_OUT;
 	level: Level;
 	readonly player: PlayerController;
 
@@ -100,7 +108,7 @@ export class Game implements LevelHost {
 			const mountain = this.level;
 			const back = () => this.goTo(mountain);
 			this.level =
-				START_MEMORY === 'cpr' ? new CprMemory(this, back) : START_MEMORY === 'office' || START_MEMORY === 'decay' ? new OfficeMemory(this, back, START_MEMORY === 'decay') : new KitchenMemory(this, back);
+				START_MEMORY === 'cpr' ? new CprMemory(this, back) : START_MEMORY === 'office' || START_MEMORY === 'decay' ? new OfficeMemory(this, back, START_MEMORY === 'decay') : new KitchenMemory(this, back, START_MEMORY === 'sad' || START_MEMORY === 'ending' ? START_MEMORY : 'happy');
 		}
 		this.player = new PlayerController(this.camera, this.input, this.level, this.level.colliders);
 		this.player.onStep = (loud) => this.footsteps.play(loud);
@@ -169,17 +177,42 @@ export class Game implements LevelHost {
 	}
 
 	/** Перейти на другой уровень под заливкой; spawn — куда встать (по умолчанию — его точка старта). */
-	goTo(level: Level, spawn?: SpawnPoint): void {
+	goTo(level: Level, spawn?: SpawnPoint, transition?: Transition): void {
 		this.beginTransition(() => {
 			this.level.leave?.();
 			this.level = level;
 			this._enter(level, spawn);
-		});
+		}, transition);
 	}
 
-	/** Мягкая заливка на весь экран: в середине хода — onCovered (смена места), к концу — исчезает. */
-	beginTransition(onCovered: () => void, color = FLASH_COLOR): void {
-		this.flash.style.background = color;
+	/** Конец игры: экран медленно уходит в чёрное и остаётся чёрным, на нём — «Конец»; музыка играет дальше. */
+	endGame(): void {
+		if (this.endTime !== null) return;
+		this.endTime = 0;
+		this.endTitle.textContent = 'Конец';
+		Object.assign(this.endTitle.style, {
+			position: 'fixed',
+			inset: '0',
+			display: 'flex',
+			alignItems: 'center',
+			justifyContent: 'center',
+			color: '#ffffff',
+			font: '600 64px Georgia, serif',
+			letterSpacing: '0.08em',
+			opacity: '0',
+			pointerEvents: 'none',
+			zIndex: '1000',
+		});
+		document.body.appendChild(this.endTitle);
+	}
+
+	/** Мягкая заливка на весь экран: в середине хода — onCovered (смена места), к концу — исчезает.
+	 * transition — свой цвет и длительности (по умолчанию — быстрая тёмная). */
+	beginTransition(onCovered: () => void, transition: Transition = {}): void {
+		this.flash.style.background = transition.color ?? FLASH_COLOR;
+		this.flashIn = transition.fadeIn ?? FLASH_IN;
+		this.flashHold = transition.hold ?? FLASH_HOLD;
+		this.flashOut = transition.fadeOut ?? FLASH_OUT;
 		this.onFlashCovered = onCovered;
 		this.flashTime = 0;
 	}
@@ -218,17 +251,30 @@ export class Game implements LevelHost {
 			// чтобы после не было рывка взгляда.
 			if (this.cutscene) this._updateCutscene(dt);
 			else if (this.dialogue.active || this.introPending) this.input.consumeMouseDelta();
-			else if (this.level.cameraPose) {
-				// Уровень ведёт камеру сам (мышь не крутит взгляд).
-				this.input.consumeMouseDelta();
-				const p = this.level.cameraPose();
-				this.player.setPose(p.position.x, p.position.y, p.position.z, p.yaw, p.pitch);
-			} else this.player.update(dt);
+			else {
+				// Уровень может вести камеру сам (мышь тогда не крутит взгляд); null — обычное управление.
+				const pose = this.level.cameraPose?.({ yaw: this.player.yaw, pitch: this.player.pitch }) ?? null;
+				if (pose) {
+					this.input.consumeMouseDelta();
+					this.player.setPose(pose.position.x, pose.position.y, pose.position.z, pose.yaw, pose.pitch);
+				} else this.player.update(dt);
+			}
 			if (!this.cutscene) this._clamp();
 			this.dialogue.update(dt);
 			this.level.update?.(dt, this.camera.position);
-			this.music.setMood(this.level.music?.() ?? DEFAULT_MOOD);
+			const mood = this.level.music?.() ?? DEFAULT_MOOD;
+			if (this.endTime !== null) {
+				// Конец: чёрное нарастает, потом проявляется «Конец»; музыка играет дальше.
+				this.endTime += dt;
+				const k = Math.min(1, this.endTime / END_FADE);
+				this.flash.style.background = '#000000';
+				this.flash.style.opacity = String(k);
+				this.endTitle.style.opacity = String(Math.min(1, Math.max(0, (this.endTime - END_FADE - 0.5) / 2)));
+			}
+			this.music.setMood(mood);
 			this.post.setSaturation(this.level.saturation?.() ?? 1);
+			this.post.setBrightness(this.level.brightness?.() ?? 1);
+			this.post.setMotionBlur(this.level.motionBlur?.() ?? 0);
 			this.post.setWave(this.level.wave?.() ?? 0, time / 1000);
 			this._updateFlash(dt);
 			if (this.introPending && this.flashTime === null) {
@@ -245,7 +291,6 @@ export class Game implements LevelHost {
 		const locked = this.input.isPointerLocked;
 		// До «Старт» подсказки нет — там свой экран.
 		this.hint.style.display = !this.started || locked ? 'none' : 'flex';
-		this.crosshair.style.display = locked && !this.dialogue.active && !this.cutscene ? 'block' : 'none';
 		this.input.endFrame();
 		this.post.render(this.level.scene, this.camera);
 	}
@@ -320,19 +365,19 @@ export class Game implements LevelHost {
 		this.flashTime += dt;
 		const t = this.flashTime;
 
-		if (this.onFlashCovered && t >= FLASH_IN) {
+		if (this.onFlashCovered && t >= this.flashIn) {
 			this.onFlashCovered();
 			this.onFlashCovered = null;
 		}
 
 		let opacity: number;
-		if (t < FLASH_IN) {
-			opacity = t / FLASH_IN;
-		} else if (t < FLASH_IN + FLASH_HOLD) {
+		if (t < this.flashIn) {
+			opacity = t / this.flashIn;
+		} else if (t < this.flashIn + this.flashHold) {
 			opacity = 1;
-		} else if (t < FLASH_IN + FLASH_HOLD + FLASH_OUT) {
+		} else if (t < this.flashIn + this.flashHold + this.flashOut) {
 			// Выход — плавный: сначала гаснет медленно, в середине быстрее, к концу снова мягко.
-			const k = (t - FLASH_IN - FLASH_HOLD) / FLASH_OUT;
+			const k = (t - this.flashIn - this.flashHold) / this.flashOut;
 			opacity = 1 - k * k * (3 - 2 * k);
 		} else {
 			opacity = 0;

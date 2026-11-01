@@ -20,12 +20,22 @@ export interface SpawnPoint {
 	pitch?: number;
 }
 
+/** Заливка при переходе: цвет и длительности (нарастает, держится, сходит), с; что не задано — по умолчанию. */
+export interface Transition {
+	color?: string;
+	fadeIn?: number;
+	hold?: number;
+	fadeOut?: number;
+}
+
 /** Что игра даёт уровням: задачи, разговоры, переходы (сами уровни о HUD и рендере не знают). */
 export interface LevelHost {
 	setObjective(text: string | null): void;
 	startDialogue(dialogue: Dialogue): void;
-	/** Перейти на уровень под заливкой; spawn — куда встать (по умолчанию — его точка старта). */
-	goTo(level: Level, spawn?: SpawnPoint): void;
+	/** Перейти на уровень под заливкой (transition — её цвет и длительности); spawn — куда встать (по умолчанию — его точка старта). */
+	goTo(level: Level, spawn?: SpawnPoint, transition?: Transition): void;
+	/** Конец игры: экран уходит в чёрное насовсем, на нём — «Конец». */
+	endGame(): void;
 	/** Клик ЛКМ в этом кадре (вне разговора) — true один раз за нажатие. */
 	consumeClick(): boolean;
 }
@@ -61,7 +71,11 @@ export interface Level extends Ground {
 	/** Насыщенность картинки сейчас (0 — чёрно-белая, 1 — обычная); нет — обычная. */
 	saturation?(): number;
 	/** Уровень сам ставит глаза и взгляд каждый кадр (сцена от первого лица без управления взглядом). */
-	cameraPose?(): { position: THREE.Vector3; yaw: number; pitch: number };
+	cameraPose?(current: { yaw: number; pitch: number }): { position: THREE.Vector3; yaw: number; pitch: number } | null;
+	/** Яркость картинки (1 — обычная, меньше — тусклее); нет — обычная. */
+	brightness?(): number;
+	/** Радиальное размытие по краям кадра 0..1 (скорость); нет — без него. */
+	motionBlur?(): number;
 	/** Подсказка внизу экрана, когда рядом нет точки для E; null — нет. */
 	hint?(): string | null;
 	/** Картинка плывёт (0..1); нет — не плывёт. */

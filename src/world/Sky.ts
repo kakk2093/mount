@@ -112,6 +112,11 @@ export class Sky {
 		this.sunDisc.lookAt(0, 0, 0);
 	}
 
+	/** Размер солнечного диска (1 — обычный); в финале солнце растёт, пока не заполнит экран. */
+	setSunScale(scale: number): void {
+		this.sunDisc.scale.setScalar(scale);
+	}
+
 	/** Купол — вокруг камеры. */
 	update(camera: THREE.Vector3): void {
 		this.group.position.copy(camera);

@@ -91,6 +91,28 @@ export class DrinkSounds {
 		}
 	}
 
+	/** Резко встать: стул скребёт по полу — низкий шум, уходящий вниз. */
+	scrape(): void {
+		const ctx = this._context();
+		const t = ctx.currentTime;
+		const src = ctx.createBufferSource();
+		src.buffer = this.noise;
+		const filter = ctx.createBiquadFilter();
+		filter.type = 'bandpass';
+		filter.Q.value = 3;
+		filter.frequency.setValueAtTime(900, t);
+		filter.frequency.exponentialRampToValueAtTime(260, t + 0.35);
+		const gain = ctx.createGain();
+		gain.gain.setValueAtTime(0.0001, t);
+		gain.gain.linearRampToValueAtTime(0.5, t + 0.04);
+		gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+		src.connect(filter);
+		filter.connect(gain);
+		gain.connect(ctx.destination);
+		src.start(t, Math.random() * 0.5);
+		src.stop(t + 0.45);
+	}
+
 	close(): void {
 		void this.ctx?.close();
 		this.ctx = null;

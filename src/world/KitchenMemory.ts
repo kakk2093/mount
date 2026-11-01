@@ -5,15 +5,19 @@ import type { Bounds, Level, LevelHost, Seat } from './Level.js';
 import type { MusicMood } from '../audio/Music.js';
 import { KitchenMusic } from '../audio/KitchenMusic.js';
 import { DrinkSounds } from '../audio/DrinkSounds.js';
+import { AmbientMusic } from '../audio/AmbientMusic.js';
+import { buildCharacter } from './characters/Character.js';
 
 /** Высота столешницы, м. */
 const TABLE_Y = 0.76;
 /** Сколько рюмок. */
-const SHOTS = 7;
+const SHOTS = 8;
 /** После каждой рюмки (индекс — сколько выпито): насыщенность (из чёрно-белого — в яркое) и слой музыки.
  * Первая — ещё ничего: всё начинается со второй. */
-const SATURATION = [0, 0, 0.25, 0.45, 0.7, 0.95, 1.25, 1.6];
-const MUSIC = [0, 0, 1, 2, 3, 4, 4, 5];
+const SATURATION = [0, 0, 0.2, 0.4, 0.6, 0.85, 1.1, 1.35, 1.6];
+const MUSIC = [0, 0, 1, 2, 3, 3, 4, 4, 5];
+/** Грустная: эмбиент звучит сразу (слой 1) и с каждой рюмкой глубже. */
+const SAD_MUSIC = [1, 1, 2, 2, 3, 3, 4, 5, 5];
 /** Яркость лампы: до первой рюмки и после последней. */
 const LAMP_FROM = 5;
 const LAMP_TO = 14;
@@ -28,6 +32,38 @@ const BOTTLE_AT = new THREE.Vector3(0.38, TABLE_Y, -0.42);
 /** Куда подносим рюмку — ко рту (чуть ниже глаз). */
 const MOUTH = new THREE.Vector3(0.02, 1.05, 0.25);
 
+// Грустная кухня (пятое воспоминание).
+/** Яркость картинки: до первой рюмки и после последней; лампа к концу. */
+const SAD_BRIGHTNESS_FROM = 0.7;
+const SAD_BRIGHTNESS = 0.22;
+const SAD_LAMP = 0.8;
+/** Встаём: за сколько секунд, на какую высоту глаз и на сколько отходим назад, м. */
+const STAND_TIME = 0.45;
+const STAND_EYE = 1.65;
+const STAND_BACK = 0.35;
+/** Бутылка: когда начинает падать (стол дёрнулся), сколько падает; когда течёт и сколько, с. */
+const FALL_AT = 0.2;
+const FALL_TIME = 0.4;
+const SPILL_AT = 0.7;
+const SPILL_TIME = 2.6;
+/** Сколько стоим над столом, потом обратно к костру, с. */
+const STAND_OUTRO = 5;
+/** Лужа у горлышка упавшей бутылки (бутылка падает от нас, к стене): центр и наибольший радиус, м. */
+const PUDDLE_AT = new THREE.Vector3(BOTTLE_AT.x, TABLE_Y + 0.003, BOTTLE_AT.z - 0.4);
+const PUDDLE_RADIUS = 0.17;
+
+// Концовка (после вершины).
+/** Где висит человек (у двери, за спиной сидящего): точка на полу под ним и на какой высоте ноги, м. */
+const HANGED_AT = new THREE.Vector3(0.75, 0.45, 0.6);
+const CEILING_Y = 2.5;
+/** Камера: крупный план лужи — откуда смотрим; в конце — откуда видно человека, м. */
+const END_CLOSE = new THREE.Vector3(PUDDLE_AT.x - 0.05, TABLE_Y + 0.22, PUDDLE_AT.z + 0.28);
+const END_WIDE = new THREE.Vector3(-0.75, 1.45, -0.55);
+/** Концовка по времени: держим крупный план, переводим камеру, держим общий план — потом чёрное, с. */
+const END_HOLD = 3.5;
+const END_MOVE = 8.5;
+const END_STAY = 5;
+
 const smooth = (x: number) => THREE.MathUtils.smoothstep(x, 0, 1);
 
 /**
@@ -35,6 +71,10 @@ const smooth = (x: number) => THREE.MathUtils.smoothstep(x, 0, 1);
  * справа закрытая дверь. Сначала тишина и всё чёрно-белое. Перед нами рюмка, бутылка водки и селёдка; по ЛКМ —
  * выпить. Со второй рюмки вступает весёлая музыка (слой за слоем), картинка наливается цветом и чуть плывёт.
  * После последней — посидеть немного и обратно к костру.
+ *
+ * sad — пятое воспоминание: та же кухня и те же рюмки, но всё наоборот: картинка чёрно-белая и с каждой рюмкой
+ * всё тусклее, вместо польки нарастает грустный эмбиент. После последней — резко встаём (стул скрипит,
+ * камеру дёргает), стол качнулся — бутылка падает на бок, остатки вытекают лужей. Постояли — обратно к костру.
  */
 export class KitchenMemory implements Level {
 	readonly scene = new THREE.Scene();
@@ -43,7 +83,7 @@ export class KitchenMemory implements Level {
 	readonly seat: Seat = { eyeY: 1.15, yawRange: THREE.MathUtils.degToRad(30), pitchMin: -0.9, pitchMax: 0.3 };
 	readonly colliders = new Colliders();
 	readonly interactables: Interactable[] = [];
-	private readonly tune = new KitchenMusic();
+	private readonly tune: { setLevel(level: number): void; stop(): void; resume?(): void };
 	private readonly sounds = new DrinkSounds();
 	/** Звуки текущего действия уже прозвучали (сбрасываются со сменой состояния). */
 	private poured = false;
@@ -54,15 +94,40 @@ export class KitchenMemory implements Level {
 	private readonly bottle = new THREE.Group();
 	private shots = 0;
 	/** Что сейчас: ждём клика, пьём, наливаем или сидим после последней. */
-	private state: 'ready' | 'drinking' | 'pouring' | 'outro' = 'ready';
+	private state: 'ready' | 'drinking' | 'pouring' | 'outro' | 'standup' = 'ready';
 	private stateTime = 0;
 	private saturationNow = 0;
+	private brightnessNow = 1;
+
 	private time = 0;
+	/** Встаём: откуда начали смотреть (взгляд в момент, когда встали) и поза камеры в этом кадре. */
+	private standFrom: { yaw: number; pitch: number } | null = null;
+	private readonly pose = { position: new THREE.Vector3(), yaw: 0, pitch: 0 };
+	private readonly puddle: THREE.Mesh;
+	private fell = false;
+	/** Концовка: висящий (покачивается) и выдано ли уже «конец игры». */
+	private hanged: THREE.Group | null = null;
+	private hangedBody: THREE.Group | null = null;
+	private ended = false;
+
+	private get sad(): boolean {
+		return this.mode === 'sad';
+	}
 
 	constructor(
 		private readonly host: LevelHost,
-		private readonly onDone: () => void
+		private readonly onDone: () => void,
+		/** happy — первое воспоминание, sad — пятое, ending — концовка после вершины. */
+		private readonly mode: 'happy' | 'sad' | 'ending' = 'happy'
 	) {
+		this.tune = mode === 'sad' ? new AmbientMusic() : mode === 'happy' ? new KitchenMusic() : { setLevel: () => {}, stop: () => {} };
+		this.puddle = new THREE.Mesh(
+			new THREE.CylinderGeometry(1, 1, 0.004, 20),
+			new THREE.MeshStandardMaterial({ color: '#dfe8f0', roughness: 0.05, transparent: true, opacity: 0.55 })
+		);
+		this.puddle.position.copy(PUDDLE_AT);
+		this.puddle.visible = false;
+		this.scene.add(this.puddle);
 		this.scene.background = new THREE.Color('#1a1714');
 		this.scene.add(new THREE.HemisphereLight('#fff4e0', '#3a2c22', 0.7));
 		this.lamp.position.set(0, 2.1, -0.4);
@@ -235,20 +300,129 @@ export class KitchenMemory implements Level {
 		dill.position.set(jarAt.x + 0.01, jarAt.y + 0.17, jarAt.z);
 		dill.rotation.x = Math.PI;
 		this.scene.add(dill);
+		if (mode === 'ending') this._buildEnding();
+	}
+
+	/**
+	 * Концовка: на столе — упавшая бутылка и лужа (как в конце грустной кухни), рюмка пустая. Сзади, у двери, —
+	 * человек в петле (всё чёрное, стрижен под машинку, усы), раскачивается; под ним — опрокинутый табурет.
+	 */
+	private _buildEnding(): void {
+		const angle = Math.PI / 2;
+		this.bottle.position.set(BOTTLE_AT.x, TABLE_Y + 0.04 * Math.sin(angle), BOTTLE_AT.z - 0.04 - 0.15 * Math.sin(angle));
+		this.bottle.rotation.set(-angle, 0, 0);
+		this.puddle.visible = true;
+		this.puddle.scale.set(PUDDLE_RADIUS, 1, PUDDLE_RADIUS * 0.8);
+		this.liquid.visible = false;
+
+		const mat = (color: string) => new THREE.MeshStandardMaterial({ color, roughness: 0.9, flatShading: true });
+		// Стена за спиной сидящего — в концовке её видно.
+		const lower = new THREE.Mesh(new THREE.BoxGeometry(2.8, 1.3, 0.05), mat('#5f8a6a'));
+		lower.position.set(0, 0.65, 1.15);
+		const upper = new THREE.Mesh(new THREE.BoxGeometry(2.8, 1.2, 0.05), mat('#e6dfcc'));
+		upper.position.set(0, 1.9, 1.15);
+		this.scene.add(lower, upper);
+
+		const person = buildCharacter({
+			coat: '#1a1a1c',
+			pants: '#141416',
+			boots: '#0e0e10',
+			skin: '#f0c090',
+			hair: '#3a2a20',
+			buzz: true,
+			mustache: '#3a2a20',
+			eyes: '#1a1a1a',
+		});
+		// Всё висит на точке под потолком — так раскачивается маятником.
+		const pivot = new THREE.Group();
+		pivot.position.set(HANGED_AT.x, CEILING_Y, HANGED_AT.z);
+		this.scene.add(pivot);
+		person.group.position.set(0, HANGED_AT.y - CEILING_Y, 0);
+		person.group.rotation.y = Math.PI;
+		person.head.rotation.set(0.25, 0, 0.4);
+		pivot.add(person.group);
+		this.hanged = pivot;
+		this.hangedBody = person.group;
+		// Верёвка: от потолка до шеи, на шее — петля.
+		const neckY = HANGED_AT.y + 0.95;
+		const ropeMat = mat('#b89a64');
+		const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, CEILING_Y - neckY, 5), ropeMat);
+		rope.position.set(0, (neckY - CEILING_Y) / 2, 0);
+		const loop = new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.014, 5, 12), ropeMat);
+		loop.rotation.x = Math.PI / 2;
+		loop.position.set(0, neckY - 0.03 - CEILING_Y, 0);
+		pivot.add(rope, loop);
+		// Табурет на боку.
+		const stool = new THREE.Group();
+		const wood = mat('#8a5a3a');
+		const seat = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.04, 0.32), wood);
+		stool.add(seat);
+		for (const [lx, lz] of [
+			[-0.13, -0.13],
+			[0.13, -0.13],
+			[-0.13, 0.13],
+			[0.13, 0.13],
+		]) {
+			const leg = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.42, 0.035), wood);
+			leg.position.set(lx, -0.21, lz);
+			stool.add(leg);
+		}
+		stool.rotation.set(0, 0.5, Math.PI / 2);
+		stool.position.set(HANGED_AT.x - 0.35, 0.16, HANGED_AT.z - 0.1);
+		this.scene.add(stool);
 	}
 
 	/** Музыка горы молчит — здесь своя. */
+	/** В концовке — та же музыка, что на вершине (финал); в воспоминаниях музыка горы молчит. */
 	music(): MusicMood {
+		if (this.mode === 'ending') return { volume: 1, brightness: 1, finale: true };
 		return { volume: 0, brightness: 0 };
 	}
 
 	saturation(): number {
-		return this.saturationNow;
+		return this.mode === 'ending' ? 1.6 : this.saturationNow;
+	}
+
+	brightness(): number {
+		return this.brightnessNow;
+	}
+
+	/** Сидя — обычный взгляд; когда встаём — камерой ведём сами: рывком вверх и назад, взгляд — на бутылку. */
+	cameraPose(current: { yaw: number; pitch: number }): { position: THREE.Vector3; yaw: number; pitch: number } | null {
+		if (this.mode === 'ending') return this._endingPose();
+		if (this.state !== 'standup') return null;
+		this.standFrom ??= { ...current };
+		const t = this.stateTime;
+		const rise = smooth(t / STAND_TIME);
+		const pos = this.pose.position.set(this.spawnPoint.x, THREE.MathUtils.lerp(1.15, STAND_EYE, rise), this.spawnPoint.z + STAND_BACK * rise);
+		// Смотрим на бутылку и лужу.
+		const look = new THREE.Vector3(BOTTLE_AT.x, TABLE_Y, BOTTLE_AT.z - 0.15);
+		const yaw = Math.atan2(-(look.x - pos.x), -(look.z - pos.z));
+		const pitch = Math.atan2(look.y - pos.y, Math.hypot(look.x - pos.x, look.z - pos.z));
+		const turn = smooth(t / 0.7);
+		// Рывок: дрожь, которая быстро стихает.
+		const shake = Math.max(0, 1 - t / 0.6) * 0.03;
+		this.pose.yaw = THREE.MathUtils.lerp(this.standFrom.yaw, yaw, turn) + (Math.random() - 0.5) * shake;
+		this.pose.pitch = THREE.MathUtils.lerp(this.standFrom.pitch, pitch, turn) + (Math.random() - 0.5) * shake;
+		return this.pose;
+	}
+
+	/** Концовка: крупный план лужи, потом камера плавно отъезжает и поворачивается — к человеку в петле. */
+	private _endingPose(): { position: THREE.Vector3; yaw: number; pitch: number } {
+		const t = this.time;
+		const m = smooth((t - END_HOLD) / END_MOVE);
+		const pos = this.pose.position.lerpVectors(END_CLOSE, END_WIDE, m);
+		// На крупном плане — чуть-чуть дрейфуем, чтобы кадр жил.
+		pos.x += Math.sin(t * 0.4) * 0.01 * (1 - m);
+		const look = PUDDLE_AT.clone().lerp(new THREE.Vector3(HANGED_AT.x, HANGED_AT.y + 0.75, HANGED_AT.z), m);
+		this.pose.yaw = Math.atan2(-(look.x - pos.x), -(look.z - pos.z));
+		this.pose.pitch = Math.atan2(look.y - pos.y, Math.hypot(look.x - pos.x, look.z - pos.z));
+		return this.pose;
 	}
 
 	/** Чем больше выпито, тем сильнее плывёт. */
 	wave(): number {
-		return this._drunk() * 0.8;
+		return this.mode === 'ending' ? 0 : this._drunk() * 0.8;
 	}
 
 	getHeightAt(): number {
@@ -257,6 +431,10 @@ export class KitchenMemory implements Level {
 
 	enter(): void {
 		this.host.setObjective(null);
+		if (this.sad) {
+			this.brightnessNow = SAD_BRIGHTNESS_FROM;
+			this.tune.setLevel(SAD_MUSIC[0]);
+		}
 	}
 
 	leave(): void {
@@ -265,17 +443,44 @@ export class KitchenMemory implements Level {
 	}
 
 	hint(): string | null {
+		if (this.mode === 'ending') return null;
 		return this.state === 'ready' ? 'Выпить — ЛКМ' : null;
 	}
 
 	update(dt: number): void {
 		this.time += dt;
 		this.stateTime += dt;
+		if (this.mode === 'ending') {
+			// Еле заметно покачивается; досмотрели — конец игры.
+			// Раскачивается маятником и медленно поворачивается на верёвке.
+			if (this.hanged && this.hangedBody) {
+				const t = this.time;
+				this.hanged.rotation.x = Math.sin(t * 1.1) * 0.05;
+				this.hanged.rotation.z = Math.sin(t * 0.8 + 1) * 0.035;
+				this.hangedBody.rotation.y = Math.PI + Math.sin(t * 0.45) * 0.18;
+			}
+			if (!this.ended && this.time >= END_HOLD + END_MOVE + END_STAY) {
+				this.ended = true;
+				this.host.endGame();
+			}
+			return;
+		}
+		this.tune.resume?.();
 		// Цвет и свет догоняют число выпитых плавно.
 		const k = 1 - Math.exp(-dt * 1.2);
-		this.saturationNow += (SATURATION[this.shots] - this.saturationNow) * k;
-		const lampTarget = THREE.MathUtils.lerp(LAMP_FROM, LAMP_TO, this._drunk());
-		this.lamp.intensity += (lampTarget - this.lamp.intensity) * k;
+		if (this.sad) {
+			// Грустная: цвета нет совсем, картинка и лампа тускнеют с каждой рюмкой.
+			this.saturationNow = 0;
+			// Тусклеет с первой же рюмки.
+			const sink = this.shots / SHOTS;
+			this.brightnessNow += (THREE.MathUtils.lerp(SAD_BRIGHTNESS_FROM, SAD_BRIGHTNESS, sink) - this.brightnessNow) * k;
+			const lampTarget = THREE.MathUtils.lerp(LAMP_FROM, SAD_LAMP, sink);
+			this.lamp.intensity += (lampTarget - this.lamp.intensity) * k;
+		} else {
+			this.saturationNow += (SATURATION[this.shots] - this.saturationNow) * k;
+			const lampTarget = THREE.MathUtils.lerp(LAMP_FROM, LAMP_TO, this._drunk());
+			this.lamp.intensity += (lampTarget - this.lamp.intensity) * k;
+		}
 
 		if (this.state === 'ready') {
 			if (this.host.consumeClick()) this._setState('drinking');
@@ -283,14 +488,57 @@ export class KitchenMemory implements Level {
 			this._animateDrink(this.stateTime / DRINK_TIME);
 			if (this.stateTime >= DRINK_TIME) {
 				if (this.shots < SHOTS) this._setState('pouring');
-				else this._setState('outro');
+				else if (this.sad) {
+					this._setState('standup');
+					this.sounds.scrape();
+				} else this._setState('outro');
 			}
 		} else if (this.state === 'pouring') {
 			this._animatePour(this.stateTime / POUR_TIME);
 			if (this.stateTime >= POUR_TIME) this._setState('ready');
+		} else if (this.state === 'standup') {
+			this._animateFall(this.stateTime);
+			if (this.stateTime >= STAND_OUTRO) {
+				this.state = 'ready';
+				this.onDone();
+			}
 		} else if (this.stateTime >= OUTRO_TIME) {
 			this.state = 'ready';
 			this.onDone();
+		}
+	}
+
+	/**
+	 * Встали — стол качнулся: бутылка валится на бок от нас (к стене), перекатываясь через нижний край донышка,
+	 * чуть подпрыгивает; из горлышка вытекают остатки — лужа растёт.
+	 */
+	private _animateFall(t: number): void {
+		const f = (t - FALL_AT) / FALL_TIME;
+		if (f > 0) {
+			// Падает с ускорением; упав — подскакивает и ложится.
+			let angle = (Math.PI / 2) * Math.min(f, 1) ** 2;
+			if (f > 1) angle -= 0.12 * Math.sin(Math.PI * Math.min((f - 1) / 0.6, 1));
+			const pivotZ = BOTTLE_AT.z - 0.04;
+			this.bottle.position.set(
+				BOTTLE_AT.x,
+				TABLE_Y + 0.15 * Math.cos(angle) + 0.04 * Math.sin(angle),
+				pivotZ + 0.04 * Math.cos(angle) - 0.15 * Math.sin(angle)
+			);
+			this.bottle.rotation.set(-angle, 0, 0);
+			if (f >= 1 && !this.fell) {
+				this.fell = true;
+				this.sounds.clink();
+			}
+		}
+		const spill = (t - SPILL_AT) / SPILL_TIME;
+		if (spill > 0) {
+			if (!this.puddle.visible) {
+				this.puddle.visible = true;
+				this.sounds.pour(SPILL_TIME * 0.8);
+			}
+			// Растёт быстро вначале, к концу — еле-еле.
+			const r = PUDDLE_RADIUS * (1 - (1 - Math.min(spill, 1)) ** 2);
+			this.puddle.scale.set(r, 1, r * 0.8);
 		}
 	}
 
@@ -316,7 +564,7 @@ export class KitchenMemory implements Level {
 			this.liquid.visible = false;
 			this.shots++;
 			this.sounds.gulp();
-			this.tune.setLevel(MUSIC[this.shots]);
+			this.tune.setLevel((this.sad ? SAD_MUSIC : MUSIC)[this.shots]);
 		}
 		if (t >= 0.95 && !this.clinked) {
 			this.clinked = true;

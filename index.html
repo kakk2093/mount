@@ -18,15 +18,10 @@
 			color: #fff; font: 600 32px system-ui, sans-serif; background: rgba(0, 0, 0, 0.55);
 			padding: 12px 28px; border-radius: 8px; pointer-events: none; white-space: nowrap;
 		}
-		#crosshair {
-			position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px;
-			border-radius: 50%; background: rgba(255, 255, 255, 0.8); box-shadow: 0 0 2px #000;
-			pointer-events: none; z-index: 1; display: none;
-		}
 		#flash {
 			position: fixed; inset: 0; opacity: 0; pointer-events: none; z-index: 8;
 		}
-		/* Стартовый экран — поверх заливки: название и кнопка «Старт». */
+		/* Стартовый экран — поверх заливки: «Надень наушники» и кнопка «Старт». */
 		#start {
 			position: fixed; inset: 0; z-index: 9; display: flex; flex-direction: column;
 			align-items: center; justify-content: center; gap: 28px; color: #e8dcc0;
@@ -39,13 +34,41 @@
 		}
 		#start button:hover { background: #fff3d6; }
 		#start button:active { transform: translateY(4px); box-shadow: 0 2px 0 #6d6553; }
+		/* «Надень наушники» — главное на экране: крупно, тёплым светом, пульсирует; значок наушников покачивается
+		   в такт, будто играет музыка; вся надпись въезжает при появлении. */
+		#headphones {
+			display: flex; flex-direction: column; align-items: center; gap: 14px;
+			font: 800 52px system-ui, sans-serif; letter-spacing: 0.04em; color: #ffe2a0;
+			animation: hp-appear 1.2s cubic-bezier(.2,1.4,.4,1) both, hp-pulse 1.6s ease-in-out 1.2s infinite;
+		}
+		#headphones .icon {
+			font-size: 96px; line-height: 1; display: inline-block;
+			animation: hp-bob 0.8s ease-in-out infinite alternate;
+			filter: drop-shadow(0 0 18px rgba(255, 200, 110, 0.8));
+		}
+		#headphones .text { text-shadow: 0 0 12px rgba(255, 190, 90, 0.9), 0 0 32px rgba(255, 150, 60, 0.6); }
+		@keyframes hp-appear {
+			from { opacity: 0; transform: translateY(-30px) scale(0.7); }
+			to { opacity: 1; transform: none; }
+		}
+		@keyframes hp-pulse {
+			0%, 100% { transform: scale(1); filter: brightness(1); }
+			50% { transform: scale(1.07); filter: brightness(1.35); }
+		}
+		@keyframes hp-bob {
+			from { transform: rotate(-10deg) translateY(0); }
+			to { transform: rotate(10deg) translateY(-8px); }
+		}
+		@media (max-width: 600px) {
+			#headphones { font-size: 34px; }
+			#headphones .icon { font-size: 64px; }
+		}
 	</style>
 </head>
 <body>
 	<div id="hint" style="display: none"></div>
-	<div id="crosshair"></div>
 	<div id="start">
-		<div>mount</div>
+		<div id="headphones"><span class="icon">🎧</span><span class="text">Надень наушники</span></div>
 		<button id="start-button" type="button">СТАРТ</button>
 	</div>
 	<div id="prompt"></div>

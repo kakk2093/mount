@@ -17,6 +17,10 @@ export interface CharacterLook {
 	mittens?: string;
 	/** Волосы — шапочкой на макушке; только без шапки. */
 	hair?: string;
+	/** Стрижка под машинку: волосы — тонким слоем по форме головы, лоб и виски открыты. */
+	buzz?: boolean;
+	/** Усы (цвет); нет — без усов. */
+	mustache?: string;
 	eyes: string;
 	unlit?: boolean;
 }
@@ -89,10 +93,25 @@ export function buildCharacter(look: CharacterLook): CharacterParts {
 		const brim = add(head, new THREE.TorusGeometry(0.245, 0.045, 4, 10), look.hat, 0, 0.06, 0);
 		brim.rotation.x = Math.PI / 2;
 		add(head, new THREE.IcosahedronGeometry(0.07, 0), look.scarf ?? look.hat, 0, CHARACTER_TOP_Y - CHARACTER_HEAD_Y - 0.06, 0);
+	} else if (look.hair && look.buzz) {
+		// Под машинку: чуть больше черепа, только верх и затылок.
+		const hair = add(head, new THREE.SphereGeometry(0.256, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2.2), look.hair, 0, 0.01, -0.015);
+		hair.rotation.x = -0.35;
+		hair.scale.set(1, 0.94, 1);
 	} else if (look.hair) {
 		// Волосы: шапочка на макушке, чуть сдвинута назад — лоб открыт.
 		const hair = add(head, new THREE.SphereGeometry(0.262, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2.4), look.hair, 0, 0.02, -0.03);
 		hair.rotation.x = -0.25;
+	}
+
+	if (look.mustache) {
+		// Усы: густая полоска под носом, края чуть вниз.
+		const m = add(head, new THREE.BoxGeometry(0.13, 0.03, 0.03), look.mustache, 0, -0.085, 0.225);
+		m.castShadow = false;
+		for (const side of [-1, 1]) {
+			const tip = add(head, new THREE.BoxGeometry(0.03, 0.04, 0.025), look.mustache, side * 0.065, -0.1, 0.215);
+			tip.castShadow = false;
+		}
 	}
 
 	return { group, head, body, hands };

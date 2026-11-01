@@ -53,6 +53,25 @@ const FIRE_SPAWN_PITCH = -0.26;
 const BRIDGE_LANDING = 2.5;
 /** Финал — когда игрок подошёл к концу тропы (смотровая на вершине) ближе этого, м. */
 const SUMMIT_REACH = 2.5;
+/** Для проверки: начать у костра с этим номером (0 — в лагере), разговор с путником уже был; null — обычный старт. */
+const DEBUG_START_FIRE: number | null = null;
+/** Финал: сколько смотрим на восход (солнце поднимается, небо светлеет), сколько летим к солнцу, с;
+ * за сколько секунд поворачиваемся к солнцу; на сколько поднимается солнце, рад; во сколько раз вырастает диск
+ * в полёте; как далеко улетаем, м; насколько картинка «пересвечивается» к концу полёта. */
+const RISE_TIME = 10;
+const FLY_TIME = 7;
+const TURN_TIME = 2.5;
+const SUN_RISE = 0.22;
+const SUN_GROW = 7;
+const FLY_DISTANCE = 90;
+const OVEREXPOSE = 1.6;
+/** Переход на кухню: тёплая заливка нарастает в конце полёта, держится и медленно сходит уже на кухне. */
+const SUN_FADE = { color: '#ffe27a', fadeIn: 2.8, hold: 1, fadeOut: 3.5 };
+const smooth = (x: number) => THREE.MathUtils.smoothstep(x, 0, 1);
+/** Финал: небо к концу восхода — светлое, утреннее. */
+const DAY_ZENITH = new THREE.Color('#78b4ff');
+const DAY_HORIZON = new THREE.Color('#fff2d8');
+const DAY_GLOW = new THREE.Color('#fff0a0');
 /** Снегопад стихает совсем, поднявшись на столько выше последнего костра, м. */
 const SNOW_STOP_ABOVE = 3;
 /** Снежная равнина вокруг (за краем сетки земли), сторона, м. */
@@ -188,7 +207,7 @@ const WEATHER: Weather[] = [
 export class Mountain implements Level {
 	readonly scene = new THREE.Scene();
 	readonly bounds: Bounds = { minX: -325, maxX: 325, minZ: -325, maxZ: 325 };
-	readonly spawnPoint: SpawnPoint = { x: 0, z: SPAWN_Z, yaw: 0 };
+	readonly spawnPoint: SpawnPoint;
 	readonly colliders = new Colliders();
 	readonly interactables: Interactable[] = [];
 	readonly maxSlope = MAX_SLOPE;
@@ -205,6 +224,11 @@ export class Mountain implements Level {
 	private readonly summit = new THREE.Vector3();
 	/** Дошли до смотровой — финал. */
 	private finale = false;
+	/** Финал: сколько секунд идёт; откуда смотрели, когда управление забрали; поза камеры в этом кадре. */
+	private finaleTime = 0;
+	private finaleFrom: { position: THREE.Vector3; yaw: number; pitch: number } | null = null;
+	private readonly finalePose = { position: new THREE.Vector3(), yaw: 0, pitch: 0 };
+	private finaleDone = false;
 	private readonly clouds = new Clouds();
 	private readonly fog = new THREE.FogExp2('#000000', 0.01);
 	private readonly hemi = new THREE.HemisphereLight();
@@ -293,6 +317,12 @@ export class Mountain implements Level {
 		shape.path.pointAt(shape.path.length, this.summit);
 		this.summit.y = this.getHeightAt(this.summit.x, this.summit.z) + 1.5;
 		this._addTraveler(camp.x + 1.6, camp.z);
+		this.spawnPoint = { x: 0, z: SPAWN_Z, yaw: 0 };
+		if (DEBUG_START_FIRE !== null) {
+			this.spawnPoint = this.fireSpawns[DEBUG_START_FIRE];
+			this.talked = true;
+			this.nextFire = DEBUG_START_FIRE;
+		}
 		this._scatterProps();
 		this._applyWeather(0);
 	}
@@ -327,6 +357,7 @@ export class Mountain implements Level {
 		// 1 — на смотровой (там полный восход), а не на высоте пика.
 		this.altitude = THREE.MathUtils.clamp(player.y / (this.summit.y - 1.5), 0, 1);
 		this._applyWeather(this.altitude);
+		if (this.finale) this._updateFinale(dt, player);
 		this.sky.update(player);
 		this.clouds.update(dt, player, this.weather.clouds);
 		this.snow.update(dt, player, this.weather.wind);
@@ -350,6 +381,76 @@ export class Mountain implements Level {
 			this.finale = true;
 			this.host.setObjective(null);
 		}
+	}
+
+	/**
+	 * Финал: управление забрано. Сначала смотрим на солнце — оно поднимается и растёт, небо светлеет.
+	 * Потом летим к нему: цвета становятся яркими, диск заполняет экран — и жёлтым переходом на кухню (концовка).
+	 */
+	private _updateFinale(dt: number, player: THREE.Vector3): void {
+		this.finaleTime += dt;
+		this.finaleFrom ??= { position: player.clone(), yaw: 0, pitch: 0 };
+		const rise = smooth(this.finaleTime / RISE_TIME);
+		const fly = THREE.MathUtils.clamp((this.finaleTime - RISE_TIME) / FLY_TIME, 0, 1);
+		// Небо: солнце выше, купол светлеет до утреннего.
+		const sky = this.weather.sky;
+		sky.sunElevation += SUN_RISE * rise;
+		sky.sun = 1;
+		sky.zenith.lerp(DAY_ZENITH, rise);
+		sky.horizon.lerp(DAY_HORIZON, rise);
+		sky.glow.lerp(DAY_GLOW, rise);
+		sky.glowStrength = 1;
+		this.sky.setLook(sky);
+		this.sky.setSunScale(1 + rise * 1.5 + smooth(fly) * SUN_GROW);
+		this.hemi.intensity *= 1 + rise * 0.5;
+		this.fog.color.lerp(DAY_HORIZON, rise);
+		// Конец полёта: всё заливает тёплым светом — и уже под ним кухня.
+		if (this.finaleTime >= RISE_TIME + FLY_TIME - SUN_FADE.fadeIn && !this.finaleDone) {
+			this.finaleDone = true;
+			this.host.goTo(new KitchenMemory(this.host, () => {}, 'ending'), undefined, SUN_FADE);
+		}
+	}
+
+	/** Полёт к солнцу: от 0 до 1. */
+	private get _fly(): number {
+		return this.finale ? THREE.MathUtils.clamp((this.finaleTime - RISE_TIME) / FLY_TIME, 0, 1) : 0;
+	}
+
+	/** В полёте картинка «пересвечивается» — всё светлее, как от солнца в глаза. */
+	brightness(): number {
+		return 1 + OVEREXPOSE * smooth(this._fly);
+	}
+
+	/** В полёте — радиальное размытие по краям: скорость. */
+	motionBlur(): number {
+		return smooth(this._fly) * 0.8;
+	}
+
+	/** Финал: камерой ведём сами — поворот к солнцу, потом полёт к нему (всё быстрее, чуть покачиваясь). */
+	cameraPose(current: { yaw: number; pitch: number }): { position: THREE.Vector3; yaw: number; pitch: number } | null {
+		if (!this.finale || !this.finaleFrom) return null;
+		const from = this.finaleFrom;
+		if (this.finaleTime < 0.05) {
+			from.yaw = current.yaw;
+			from.pitch = current.pitch;
+		}
+		const sun = this.sky.sunDir;
+		const fly = THREE.MathUtils.clamp((this.finaleTime - RISE_TIME) / FLY_TIME, 0, 1);
+		this.finalePose.position.copy(from.position).addScaledVector(sun, FLY_DISTANCE * fly ** 2.5);
+		this.finalePose.position.y += Math.sin(this.finaleTime * 1.3) * 0.15 * fly;
+		const sunYaw = Math.atan2(-sun.x, -sun.z);
+		const sunPitch = Math.asin(THREE.MathUtils.clamp(sun.y, -1, 1));
+		const turn = smooth(this.finaleTime / TURN_TIME);
+		// Поворот — по кратчайшей дуге.
+		const dyaw = THREE.MathUtils.euclideanModulo(sunYaw - from.yaw + Math.PI, Math.PI * 2) - Math.PI;
+		this.finalePose.yaw = from.yaw + dyaw * turn;
+		this.finalePose.pitch = THREE.MathUtils.lerp(from.pitch, sunPitch, turn);
+		return this.finalePose;
+	}
+
+	/** Финал: в полёте к солнцу цвета разгораются, как в воспоминаниях. */
+	saturation(): number {
+		return 1 + 0.6 * this._fly;
 	}
 
 	/** Музыка светлеет с высотой: внизу глухо и скупо, к рассвету — открыто. */
@@ -416,6 +517,10 @@ export class Mountain implements Level {
 				// Костёр в лагере — реанимация, второй — кухня; остальные пока заглушки.
 				if (i === 0) {
 					this.host.goTo(new CprMemory(this.host, onDone));
+					return;
+				}
+				if (i === 4) {
+					this.host.goTo(new KitchenMemory(this.host, onDone, 'sad'));
 					return;
 				}
 				if (i === 3) {
