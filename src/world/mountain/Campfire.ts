@@ -3,10 +3,10 @@ import * as THREE from 'three';
 const LOG = new THREE.MeshStandardMaterial({ color: '#3b2a1e', roughness: 1, flatShading: true });
 /** Обугленные концы поленьев и угли — тлеют сами (не зависят от света). */
 const CHAR = new THREE.MeshStandardMaterial({ color: '#1a1210', emissive: '#ff4a10', emissiveIntensity: 0.6, roughness: 1, flatShading: true });
-const EMBERS = new THREE.MeshBasicMaterial({ color: '#ff6a1e', fog: false });
+const EMBERS = new THREE.MeshBasicMaterial({ color: '#ff6a1e' });
 const STONE = new THREE.MeshStandardMaterial({ color: '#4a4d55', roughness: 1, flatShading: true });
 const SNOW = new THREE.MeshStandardMaterial({ color: '#cdd6e2', roughness: 1, flatShading: true });
-/** Языки пламени: снаружи — рыжий, внутри — жёлтый, в сердцевине — почти белый. Светятся сами, туман их не гасит. */
+/** Языки пламени: снаружи — рыжий, внутри — жёлтый, в сердцевине — почти белый. Светятся сами; вдали тонут в тумане, как всё остальное. */
 const FLAMES: { color: string; radius: number; height: number; count: number; spread: number }[] = [
 	{ color: '#e8521c', radius: 0.2, height: 0.75, count: 4, spread: 0.16 },
 	{ color: '#ff9a2e', radius: 0.15, height: 0.6, count: 3, spread: 0.1 },
@@ -96,7 +96,7 @@ export class Campfire {
 
 		// Пламя: несколько конусов-«языков» в каждом слое, чуть врозь.
 		for (const layer of FLAMES) {
-			const mat = new THREE.MeshBasicMaterial({ color: layer.color, fog: false });
+			const mat = new THREE.MeshBasicMaterial({ color: layer.color });
 			for (let i = 0; i < layer.count; i++) {
 				const flame = new THREE.Mesh(new THREE.ConeGeometry(layer.radius, layer.height, 5), mat);
 				const a = (i / layer.count) * Math.PI * 2 + Math.random();
@@ -112,7 +112,7 @@ export class Campfire {
 		for (let i = 0; i < SPARKS; i++) this.sparkLife[i] = Math.random();
 		const geometry = new THREE.BufferGeometry();
 		geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-		this.sparks = new THREE.Points(geometry, new THREE.PointsMaterial({ color: '#ffb25a', size: 0.05, fog: false }));
+		this.sparks = new THREE.Points(geometry, new THREE.PointsMaterial({ color: '#ffb25a', size: 0.05 }));
 		this.sparks.frustumCulled = false;
 		this.group.add(this.sparks);
 

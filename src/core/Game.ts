@@ -36,8 +36,8 @@ const DEFAULT_MOOD: MusicMood = { volume: 1, brightness: 0.4 };
 /** Мысли героя на старте — когда сошла заливка. */
 const INTRO: Dialogue = {
 	lines: [
-		{ speaker: PLAYER_NAME, voice: 'player', text: 'Холодно.' },
-		{ speaker: PLAYER_NAME, voice: 'player', text: 'Там, у костра, кто-то есть.' },
+		{ speaker: PLAYER_NAME, voice: 'player', text: 'Вот я и здесь.' },
+		{ speaker: PLAYER_NAME, voice: 'player', text: 'Всегда подозревал, что так оно всё и будет.' },
 	],
 };
 
@@ -181,6 +181,7 @@ export class Game implements LevelHost {
 		this.player.maxSlope = level.maxSlope ?? Infinity;
 		this.footsteps.surface = level.surface ?? 'hard';
 		this.player.spawn(spawn.x, spawn.z, spawn.yaw);
+		this.player.pitch = spawn.pitch ?? 0;
 		this.objective = null;
 		this.post.setPalette(level.palette ?? null, undefined, level.paletteStrength);
 		level.enter?.();

@@ -15,6 +15,7 @@ import { MountainShape, PATH_HALF_WIDTH, PATH_START_RADIUS, PEAK_HEIGHT } from '
 import { MountainTerrain, TERRAIN_HALF } from './MountainTerrain.js';
 import { Bridge } from './Bridge.js';
 import { Campfire } from './Campfire.js';
+import { Shade } from './Shade.js';
 import { Clouds } from './Clouds.js';
 
 const SEED = 1337;
@@ -35,10 +36,16 @@ const PROP_STEP = 3.5;
 /** Площадка костра: радиус ровного, м, и насколько она сдвинута от оси тропы наружу (вниз по склону). */
 const SITE_RADIUS = 3.5;
 const SITE_OFFSET = 4;
-/** Игрок появляется на равнине прямо перед началом тропы (лицом к ней), лагерь (костёр, путник) — сбоку от тропы. */
-const SPAWN_Z = PATH_START_RADIUS + 6;
+/** Игрок появляется в лесу метрах в 55 от лагеря (лицом к горе), лагерь (костёр, путник) — сбоку от начала тропы. */
+const SPAWN_Z = PATH_START_RADIUS + 56;
+/** Вокруг точки появления деревья не ставим, м. */
+const SPAWN_CLEAR = 2.5;
 const CAMP_X = -4.5;
 const CAMP_Z = PATH_START_RADIUS - 1;
+/** Имя путника в разговоре: кто он — неизвестно. */
+const TRAVELER_NAME = '???';
+/** Наклон взгляда, когда возвращаемся к костру из воспоминания, рад. */
+const FIRE_SPAWN_PITCH = -0.26;
 /** Настил моста заходит на берег на столько, м: сетка земли у края ущелья — скатом вниз, по ней не сойти с моста. */
 const BRIDGE_LANDING = 2.5;
 /** Финал — когда игрок подошёл к концу тропы (смотровая на вершине) ближе этого, м. */
@@ -213,6 +220,7 @@ export class Mountain implements Level {
 	/** Куда встать, вернувшись из воспоминания: у костра, лицом к нему. */
 	private readonly fireSpawns: SpawnPoint[] = [];
 	private readonly travelerHead = new THREE.Vector3();
+	private traveler!: Shade;
 	/** Следующий костёр, до которого идти (1..); 0 — ещё не говорили с путником; больше числа костров — всё. */
 	private nextFire = 0;
 	private time = 0;
@@ -267,13 +275,13 @@ export class Mountain implements Level {
 			this.fires.push(fire);
 			this.scene.add(fire.group);
 			this.colliders.add(site.x, site.z, 0.7);
-			// Встаём у костра со стороны тропы (к вершине), лицом к огню.
+			// Встаём у костра со стороны тропы (к вершине), лицом к огню и глядя чуть вниз — на пламя.
 			const r = Math.hypot(site.x, site.z);
 			const inX = r > 1 ? -site.x / r : 0;
 			const inZ = r > 1 ? -site.z / r : 1;
 			const sx = site.x + inX * 1.8;
 			const sz = site.z + inZ * 1.8;
-			this.fireSpawns.push({ x: sx, z: sz, yaw: Math.atan2(-(site.x - sx), -(site.z - sz)) });
+			this.fireSpawns.push({ x: sx, z: sz, yaw: Math.atan2(-(site.x - sx), -(site.z - sz)), pitch: FIRE_SPAWN_PITCH });
 			if (i > 0) this._addFireInteraction(i);
 		}
 		this.snowStopY = this.fires[this.fires.length - 1].group.position.y + SNOW_STOP_ABOVE;
@@ -331,6 +339,7 @@ export class Mountain implements Level {
 			nearest = Math.min(nearest, player.distanceTo(fire.flame));
 		}
 		this.fireSound.update(nearest);
+		this.traveler.update(this.time, dt);
 		// Дошли до смотровой (после всех костров) — финал: задачи больше нет, музыка в полную силу.
 		if (!this.finale && this.nextFire >= this.fires.length && Math.hypot(player.x - this.summit.x, player.z - this.summit.z) < SUMMIT_REACH) {
 			this.finale = true;
@@ -380,7 +389,7 @@ export class Mountain implements Level {
 	}
 
 	private _objectiveText(): string | null {
-		if (this.nextFire === 0) return 'Поговори с путником';
+		if (this.nextFire === 0) return 'Подойди к костру';
 		if (this.nextFire < this.fires.length) return 'Дойди до огня';
 		return this.finale ? null : 'Поднимись на вершину';
 	}
@@ -411,18 +420,8 @@ export class Mountain implements Level {
 	/** Путник у костра в лагере: говорит, куда идти; после разговора — первая задача. */
 	private _addTraveler(x: number, z: number): void {
 		const y = this.getHeightAt(x, z);
-		const npc = new THREE.Group();
-		const coat = new THREE.MeshStandardMaterial({ color: '#4b5a6e', roughness: 1 });
-		const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.3, 0.7, 4, 8), coat);
-		body.position.y = 0.75;
-		const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 10, 8), new THREE.MeshStandardMaterial({ color: '#d7b08a', roughness: 1 }));
-		head.position.y = 1.45;
-		for (const m of [body, head]) m.castShadow = true;
-		npc.add(body, head);
-		npc.position.set(x, y, z);
-		const camp = this.fires[0].group.position;
-		npc.lookAt(camp.x, y, camp.z);
-		this.scene.add(npc);
+		this.traveler = new Shade(x, y, z);
+		this.scene.add(this.traveler.group);
 		this.colliders.add(x, z, 0.4);
 		this.travelerHead.set(x, y + 1.45, z);
 		this.interactables.push({
@@ -436,10 +435,10 @@ export class Mountain implements Level {
 	private _firstTalk(): Dialogue {
 		return {
 			lines: [
-				{ speaker: 'Путник', voice: 'low', text: 'Не спится?' },
-				{ speaker: PLAYER_NAME, voice: 'player', text: 'Где я?' },
-				{ speaker: 'Путник', voice: 'low', text: 'У подножия. Внизу всегда метёт. Поднимешься над облаками — станет ясно.' },
-				{ speaker: 'Путник', voice: 'low', text: 'По дороге будут костры. У каждого присядь. Вспомни.' },
+				{ speaker: TRAVELER_NAME, voice: 'low', text: 'А, это ты.' },
+				{ speaker: TRAVELER_NAME, voice: 'low', text: 'Давно пора.' },
+				{ speaker: TRAVELER_NAME, voice: 'low', text: 'Ну, раз пришёл — поднимайся наверх.' },
+				{ speaker: TRAVELER_NAME, voice: 'low', text: 'Здесь, внизу, тебе уже делать нечего.' },
 			],
 			onEnd: () => {
 				this.nextFire = 1;
@@ -449,7 +448,7 @@ export class Mountain implements Level {
 	}
 
 	private _repeatTalk(): Dialogue {
-		return { lines: [{ speaker: 'Путник', voice: 'low', text: 'Наверх. Огни не дадут сбиться.' }] };
+		return { lines: [{ speaker: TRAVELER_NAME, voice: 'low', text: 'Поднимайся наверх. Здесь, внизу, тебе делать нечего.' }] };
 	}
 
 	/**
@@ -470,6 +469,7 @@ export class Mountain implements Level {
 				if (shape.path.nearest(x, z, PATH_HALF_WIDTH + 3.5)) continue;
 				if (shape.sites.some((s) => Math.hypot(x - s.x, z - s.z) < s.radius + 2)) continue;
 				if (shape.gullyDepth(x, z) > 0.5) continue;
+				if (Math.hypot(x, z - SPAWN_Z) < SPAWN_CLEAR) continue;
 				const y = terrain.getHeightAt(x, z);
 				const slope = terrain.slopeAt(x, z);
 				const crest = shape.relief(x, z, false);
