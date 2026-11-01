@@ -8,6 +8,7 @@ import { WindSound } from '../../audio/WindSound.js';
 import { Sky, type SkyLook } from '../Sky.js';
 import { Snow } from '../Snow.js';
 import { MemoryLevel } from '../MemoryLevel.js';
+import { KitchenMemory } from '../KitchenMemory.js';
 import { GeometryBatch } from '../props/GeometryBatch.js';
 import * as P from '../props/Props.js';
 import { createNoise2D, createRng } from '../../utils/random.js';
@@ -15,7 +16,7 @@ import { MountainShape, PATH_HALF_WIDTH, PATH_START_RADIUS, PEAK_HEIGHT } from '
 import { MountainTerrain, TERRAIN_HALF } from './MountainTerrain.js';
 import { Bridge } from './Bridge.js';
 import { Campfire } from './Campfire.js';
-import { Shade } from './Shade.js';
+import { SHADE_HEAD_Y, Shade } from './Shade.js';
 import { Clouds } from './Clouds.js';
 
 const SEED = 1337;
@@ -56,7 +57,7 @@ const SNOW_STOP_ABOVE = 3;
 const PLAIN_SIZE = 6000;
 /** Воспоминания у костров (заглушки): реплики и цвет воздуха. */
 const MEMORIES: { color: string; lines: string[] }[] = [
-	{ color: '#3a2a1e', lines: ['(Воспоминание первое — здесь будет сцена.)', 'Тёплый свет. Кухня. Кто-то ждёт.'] },
+	{ color: '#3a2a1e', lines: ['(Воспоминание у костра в лагере — здесь будет сцена.)'] },
 	{ color: '#1e2a3a', lines: ['(Воспоминание второе — здесь будет сцена.)', 'Вода. Я тогда не обернулся.'] },
 	{ color: '#2a2e1e', lines: ['(Воспоминание третье — здесь будет сцена.)', 'Дорога. Мы молчали всю дорогу.'] },
 	{ color: '#3a3226', lines: ['(Воспоминание последнее — здесь будет сцена.)', 'Вот зачем я поднимался.'] },
@@ -221,7 +222,9 @@ export class Mountain implements Level {
 	private readonly fireSpawns: SpawnPoint[] = [];
 	private readonly travelerHead = new THREE.Vector3();
 	private traveler!: Shade;
-	/** Следующий костёр, до которого идти (1..); 0 — ещё не говорили с путником; больше числа костров — всё. */
+	/** Поговорили с фигурой у костра в лагере — только после этого огонь уводит в воспоминание. */
+	private talked = false;
+	/** Следующий костёр, у которого сесть (0 — в лагере); больше числа костров — всё. */
 	private nextFire = 0;
 	private time = 0;
 	/** Высота игрока 0..1 (подножие..вершина) — по ней погода и музыка. */
@@ -282,7 +285,7 @@ export class Mountain implements Level {
 			const sx = site.x + inX * 1.8;
 			const sz = site.z + inZ * 1.8;
 			this.fireSpawns.push({ x: sx, z: sz, yaw: Math.atan2(-(site.x - sx), -(site.z - sz)), pitch: FIRE_SPAWN_PITCH });
-			if (i > 0) this._addFireInteraction(i);
+			this._addFireInteraction(i);
 		}
 		this.snowStopY = this.fires[this.fires.length - 1].group.position.y + SNOW_STOP_ABOVE;
 		shape.path.pointAt(shape.path.length, this.summit);
@@ -353,7 +356,7 @@ export class Mountain implements Level {
 	}
 
 	objectiveTarget(): THREE.Vector3 | null {
-		if (this.nextFire === 0) return this.travelerHead;
+		if (!this.talked) return this.travelerHead;
 		if (this.nextFire < this.fires.length) return this.fires[this.nextFire].flame;
 		return this.finale ? null : this.summit;
 	}
@@ -389,7 +392,8 @@ export class Mountain implements Level {
 	}
 
 	private _objectiveText(): string | null {
-		if (this.nextFire === 0) return 'Подойди к костру';
+		if (!this.talked) return 'Подойди к костру';
+		if (this.nextFire === 0) return 'Сядь у огня';
 		if (this.nextFire < this.fires.length) return 'Дойди до огня';
 		return this.finale ? null : 'Поднимись на вершину';
 	}
@@ -401,16 +405,22 @@ export class Mountain implements Level {
 			position: fire.flame,
 			reach: 2.6,
 			text: 'сесть у огня',
-			enabled: () => this.nextFire === i,
+			enabled: () => this.talked && this.nextFire === i,
 			run: () => {
-				const memory = MEMORIES[(i - 1) % MEMORIES.length];
+				const onDone = () => {
+					this.nextFire = i + 1;
+					this.host.goTo(this, this.fireSpawns[i]);
+				};
+				// Второй костёр — кухня; остальные пока заглушки.
+				if (i === 1) {
+					this.host.goTo(new KitchenMemory(this.host, onDone));
+					return;
+				}
+				const memory = MEMORIES[i % MEMORIES.length];
 				const level = new MemoryLevel(this.host, {
 					color: memory.color,
 					lines: memory.lines.map((text) => ({ speaker: PLAYER_NAME, voice: 'player', text })),
-					onDone: () => {
-						this.nextFire = i + 1;
-						this.host.goTo(this, this.fireSpawns[i]);
-					},
+					onDone,
 				});
 				this.host.goTo(level);
 			},
@@ -421,14 +431,17 @@ export class Mountain implements Level {
 	private _addTraveler(x: number, z: number): void {
 		const y = this.getHeightAt(x, z);
 		this.traveler = new Shade(x, y, z);
+		// Лицом к огню.
+		const camp = this.fires[0].group.position;
+		this.traveler.group.lookAt(camp.x, y, camp.z);
 		this.scene.add(this.traveler.group);
 		this.colliders.add(x, z, 0.4);
-		this.travelerHead.set(x, y + 1.45, z);
+		this.travelerHead.set(x, y + SHADE_HEAD_Y, z);
 		this.interactables.push({
 			position: this.travelerHead,
 			reach: 2.5,
 			text: 'поговорить',
-			dialogue: () => (this.nextFire === 0 ? this._firstTalk() : this._repeatTalk()),
+			dialogue: () => (this.talked ? this._repeatTalk() : this._firstTalk()),
 		});
 	}
 
@@ -439,16 +452,19 @@ export class Mountain implements Level {
 				{ speaker: TRAVELER_NAME, voice: 'low', text: 'Давно пора.' },
 				{ speaker: TRAVELER_NAME, voice: 'low', text: 'Ну, раз пришёл — поднимайся наверх.' },
 				{ speaker: TRAVELER_NAME, voice: 'low', text: 'Здесь, внизу, тебе уже делать нечего.' },
+				{ speaker: TRAVELER_NAME, voice: 'low', text: 'Но прежде чем пойдёшь туда — посиди у костра.' },
 			],
 			onEnd: () => {
-				this.nextFire = 1;
+				this.talked = true;
 				this.host.setObjective(this._objectiveText());
 			},
 		};
 	}
 
 	private _repeatTalk(): Dialogue {
-		return { lines: [{ speaker: TRAVELER_NAME, voice: 'low', text: 'Поднимайся наверх. Здесь, внизу, тебе делать нечего.' }] };
+		// Пока не посидел у костра в лагере — напоминает про него.
+		const text = this.nextFire === 0 ? 'Посиди у костра.' : 'Поднимайся наверх. Здесь, внизу, тебе делать нечего.';
+		return { lines: [{ speaker: TRAVELER_NAME, voice: 'low', text }] };
 	}
 
 	/**

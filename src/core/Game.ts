@@ -13,6 +13,7 @@ import { TargetMarker } from '../ui/TargetMarker.js';
 import { ProgressBar } from '../ui/ProgressBar.js';
 import type { Level, LevelHost, SpawnPoint } from '../world/Level.js';
 import { Mountain } from '../world/mountain/Mountain.js';
+import { KitchenMemory } from '../world/KitchenMemory.js';
 
 /** Во сколько раз буфер рендера меньше экрана — размер «пикселя». */
 const PIXEL_SIZE = 4;
@@ -32,6 +33,8 @@ const VOICE_PITCH: Record<Voice, number> = { player: 170, npc: 260, low: 120, hi
 /** Сколько длится сбой картинки и звука на глитч-хвосте реплики, с. */
 const GLITCH_TIME = 0.4;
 /** Настроение музыки, если уровень своего не задал. */
+/** ВРЕМЕННО, для проверки: начинать сразу с кухни (первое воспоминание), без вступления; после неё — на гору. */
+const START_IN_KITCHEN = false;
 const DEFAULT_MOOD: MusicMood = { volume: 1, brightness: 0.4 };
 /** Мысли героя на старте — когда сошла заливка. */
 const INTRO: Dialogue = {
@@ -80,7 +83,7 @@ export class Game implements LevelHost {
 	/** Был «Старт»: до него экран залит, игрок стоит. */
 	private started = false;
 	/** Мысли героя на старте ещё не звучали: начнутся, как только сойдёт заливка. */
-	private introPending = true;
+	private introPending = !START_IN_KITCHEN;
 	level: Level;
 	readonly player: PlayerController;
 
@@ -91,6 +94,10 @@ export class Game implements LevelHost {
 
 		this.input = new Input(this.renderer.domElement);
 		this.level = new Mountain(this);
+		if (START_IN_KITCHEN) {
+			const mountain = this.level;
+			this.level = new KitchenMemory(this, () => this.goTo(mountain));
+		}
 		this.player = new PlayerController(this.camera, this.input, this.level, this.level.colliders);
 		this.player.onStep = (loud) => this.footsteps.play(loud);
 		this._enter(this.level);
@@ -131,6 +138,10 @@ export class Game implements LevelHost {
 	start(): void {
 		this.timer.connect(document);
 		this.renderer.setAnimationLoop((time) => this._frame(time));
+	}
+
+	consumeClick(): boolean {
+		return !this.dialogue.active && this.input.consumePress('Mouse0');
 	}
 
 	/** null — задачи нет, плашка и маркер скрыты. */
@@ -180,7 +191,14 @@ export class Game implements LevelHost {
 		this.player.rooted = false;
 		this.player.maxSlope = level.maxSlope ?? Infinity;
 		this.footsteps.surface = level.surface ?? 'hard';
-		this.player.spawn(spawn.x, spawn.z, spawn.yaw);
+		const seat = level.seat;
+		if (seat) {
+			this.player.sit(spawn.x, spawn.z, spawn.yaw, seat.eyeY);
+			this.player.lookLimit = { yaw: spawn.yaw, yawRange: seat.yawRange, pitchMin: seat.pitchMin, pitchMax: seat.pitchMax };
+		} else {
+			this.player.spawn(spawn.x, spawn.z, spawn.yaw);
+			this.player.lookLimit = null;
+		}
 		this.player.pitch = spawn.pitch ?? 0;
 		this.objective = null;
 		this.post.setPalette(level.palette ?? null, undefined, level.paletteStrength);
@@ -201,6 +219,8 @@ export class Game implements LevelHost {
 			this.dialogue.update(dt);
 			this.level.update?.(dt, this.camera.position);
 			this.music.setMood(this.level.music?.() ?? DEFAULT_MOOD);
+			this.post.setSaturation(this.level.saturation?.() ?? 1);
+			this.post.setWave(this.level.wave?.() ?? 0, time / 1000);
 			this._updateFlash(dt);
 			if (this.introPending && this.flashTime === null) {
 				this.introPending = false;
@@ -237,9 +257,13 @@ export class Game implements LevelHost {
 			if (this.input.consumePress('Mouse0')) this.dialogue.advance();
 			return;
 		}
-		const target = this.cutscene || this.flashTime !== null || this.introPending ? null : this._pickInteractable();
+		const busy = !!this.cutscene || this.flashTime !== null || this.introPending;
+		const target = busy ? null : this._pickInteractable();
 		if (!target) {
-			this.prompt.style.display = 'none';
+			// Нет точки рядом — подсказка самого уровня (например, «Выпить — ЛКМ»).
+			const hint = busy ? null : (this.level.hint?.() ?? null);
+			this.prompt.textContent = hint ?? '';
+			this.prompt.style.display = hint ? 'block' : 'none';
 			return;
 		}
 		const actionable = !!(target.run || target.dialogue);

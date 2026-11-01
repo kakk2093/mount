@@ -34,6 +34,7 @@ uniform vec3 palette[MAX_PALETTE];
 uniform int paletteSize;
 uniform float paletteDither;
 uniform float paletteStrength;
+uniform float saturation;
 // 0 — дизеринг по матрице Байера (квадратный узор), 1 — шум (зерно; noiseSeed меняется — зерно «живёт»),
 // 2 — без дизеринга (ровные заливки).
 uniform int ditherMode;
@@ -116,6 +117,10 @@ void main() {
 	// Виньетка.
 	vec2 v = vUv - 0.5;
 	color *= 1.0 - vignetteStrength * dot(v, v) * 2.0;
+
+	// Насыщенность: 0 — чёрно-белое, 1 — как есть, больше — ярче.
+	float luma = dot(color, vec3(0.299, 0.587, 0.114));
+	color = max(mix(vec3(luma), color, saturation), 0.0);
 
 	// Постеризация с дизерингом — в sRGB, чтобы ступени распределялись по восприятию, а не по линейной яркости.
 	vec3 s = pow(max(color, 0.0), vec3(1.0 / 2.2));
@@ -206,6 +211,7 @@ export class PostProcess {
 				paletteSize: { value: 0 },
 				paletteDither: { value: 0.12 },
 				paletteStrength: { value: 1 },
+				saturation: { value: 1 },
 				ditherMode: { value: 0 },
 				noiseSeed: { value: 0 },
 				ditherAmount: { value: DITHER_AMOUNT },
@@ -229,6 +235,11 @@ export class PostProcess {
 	setGlitch(amount: number, seed: number): void {
 		this.material.uniforms.glitch.value = amount;
 		this.material.uniforms.glitchSeed.value = seed;
+	}
+
+	/** Насыщенность: 0 — чёрно-белое, 1 — как есть, больше 1 — ярче. */
+	setSaturation(amount: number): void {
+		this.material.uniforms.saturation.value = amount;
 	}
 
 	/** 0..1 — «подводное» колыхание картинки; time — секунды, чтобы волны бежали. */

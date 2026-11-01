@@ -64,6 +64,8 @@ export class PlayerController {
 	private stepDistance = 0;
 	/** Высота глаз сидя; null — стоим. Сидя камера неподвижна, пока не встанешь. */
 	private seatedEyeY: number | null = null;
+	/** Сидя — в каких пределах можно крутить взгляд (yaw — середина); null — сидя мышь не поворачивает камеру. */
+	lookLimit: { yaw: number; yawRange: number; pitchMin: number; pitchMax: number } | null = null;
 	private readonly move = new THREE.Vector3();
 	/** Фаза шага: +π за шаг (футфолы — на кратных π, как и звук шага); сила покачивания 0..1 и его размах. */
 	bobPhase = 0;
@@ -246,7 +248,14 @@ export class PlayerController {
 	private _updateLook(): void {
 		const mouse = this.input.consumeMouseDelta();
 		// Сидя мышь не поворачивает камеру (движение сбрасываем, чтобы не было рывка, когда встанешь).
-		if (this.seatedEyeY !== null) return;
+		if (this.seatedEyeY !== null) {
+			const lim = this.lookLimit;
+			if (!lim) return;
+			this.yaw = THREE.MathUtils.clamp(this.yaw - mouse.x * MOUSE_SENSITIVITY, lim.yaw - lim.yawRange, lim.yaw + lim.yawRange);
+			this.pitch = THREE.MathUtils.clamp(this.pitch - mouse.y * MOUSE_SENSITIVITY, lim.pitchMin, lim.pitchMax);
+			this._applyRotation();
+			return;
+		}
 		this.yaw -= mouse.x * MOUSE_SENSITIVITY;
 		this.pitch -= mouse.y * MOUSE_SENSITIVITY;
 		this.pitch = THREE.MathUtils.clamp(this.pitch, -MAX_PITCH, MAX_PITCH);
