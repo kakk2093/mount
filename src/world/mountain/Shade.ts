@@ -28,6 +28,7 @@ export class Shade {
 			skin: '#090a10',
 			hat: '#0e1018',
 			scarf: '#111320',
+			mittens: '#111320',
 			eyes: '#d9cfb4',
 			unlit: true,
 		});

@@ -9,6 +9,8 @@ import { Sky, type SkyLook } from '../Sky.js';
 import { Snow } from '../Snow.js';
 import { MemoryLevel } from '../MemoryLevel.js';
 import { KitchenMemory } from '../KitchenMemory.js';
+import { CprMemory } from '../CprMemory.js';
+import { OfficeMemory } from '../OfficeMemory.js';
 import { GeometryBatch } from '../props/GeometryBatch.js';
 import * as P from '../props/Props.js';
 import { createNoise2D, createRng } from '../../utils/random.js';
@@ -411,7 +413,19 @@ export class Mountain implements Level {
 					this.nextFire = i + 1;
 					this.host.goTo(this, this.fireSpawns[i]);
 				};
-				// Второй костёр — кухня; остальные пока заглушки.
+				// Костёр в лагере — реанимация, второй — кухня; остальные пока заглушки.
+				if (i === 0) {
+					this.host.goTo(new CprMemory(this.host, onDone));
+					return;
+				}
+				if (i === 3) {
+					this.host.goTo(new OfficeMemory(this.host, onDone, true));
+					return;
+				}
+				if (i === 2) {
+					this.host.goTo(new OfficeMemory(this.host, onDone));
+					return;
+				}
 				if (i === 1) {
 					this.host.goTo(new KitchenMemory(this.host, onDone));
 					return;

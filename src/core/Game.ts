@@ -14,6 +14,8 @@ import { ProgressBar } from '../ui/ProgressBar.js';
 import type { Level, LevelHost, SpawnPoint } from '../world/Level.js';
 import { Mountain } from '../world/mountain/Mountain.js';
 import { KitchenMemory } from '../world/KitchenMemory.js';
+import { CprMemory } from '../world/CprMemory.js';
+import { OfficeMemory } from '../world/OfficeMemory.js';
 
 /** Во сколько раз буфер рендера меньше экрана — размер «пикселя». */
 const PIXEL_SIZE = 4;
@@ -33,8 +35,8 @@ const VOICE_PITCH: Record<Voice, number> = { player: 170, npc: 260, low: 120, hi
 /** Сколько длится сбой картинки и звука на глитч-хвосте реплики, с. */
 const GLITCH_TIME = 0.4;
 /** Настроение музыки, если уровень своего не задал. */
-/** ВРЕМЕННО, для проверки: начинать сразу с кухни (первое воспоминание), без вступления; после неё — на гору. */
-const START_IN_KITCHEN = false;
+/** Для проверки: начать сразу с воспоминания (без вступления; после него — на гору); null — обычный старт. */
+const START_MEMORY: 'cpr' | 'kitchen' | 'office' | 'decay' | null = 'decay';
 const DEFAULT_MOOD: MusicMood = { volume: 1, brightness: 0.4 };
 /** Мысли героя на старте — когда сошла заливка. */
 const INTRO: Dialogue = {
@@ -83,7 +85,7 @@ export class Game implements LevelHost {
 	/** Был «Старт»: до него экран залит, игрок стоит. */
 	private started = false;
 	/** Мысли героя на старте ещё не звучали: начнутся, как только сойдёт заливка. */
-	private introPending = !START_IN_KITCHEN;
+	private introPending = START_MEMORY === null;
 	level: Level;
 	readonly player: PlayerController;
 
@@ -94,9 +96,11 @@ export class Game implements LevelHost {
 
 		this.input = new Input(this.renderer.domElement);
 		this.level = new Mountain(this);
-		if (START_IN_KITCHEN) {
+		if (START_MEMORY) {
 			const mountain = this.level;
-			this.level = new KitchenMemory(this, () => this.goTo(mountain));
+			const back = () => this.goTo(mountain);
+			this.level =
+				START_MEMORY === 'cpr' ? new CprMemory(this, back) : START_MEMORY === 'office' || START_MEMORY === 'decay' ? new OfficeMemory(this, back, START_MEMORY === 'decay') : new KitchenMemory(this, back);
 		}
 		this.player = new PlayerController(this.camera, this.input, this.level, this.level.colliders);
 		this.player.onStep = (loud) => this.footsteps.play(loud);
@@ -214,7 +218,12 @@ export class Game implements LevelHost {
 			// чтобы после не было рывка взгляда.
 			if (this.cutscene) this._updateCutscene(dt);
 			else if (this.dialogue.active || this.introPending) this.input.consumeMouseDelta();
-			else this.player.update(dt);
+			else if (this.level.cameraPose) {
+				// Уровень ведёт камеру сам (мышь не крутит взгляд).
+				this.input.consumeMouseDelta();
+				const p = this.level.cameraPose();
+				this.player.setPose(p.position.x, p.position.y, p.position.z, p.yaw, p.pitch);
+			} else this.player.update(dt);
 			if (!this.cutscene) this._clamp();
 			this.dialogue.update(dt);
 			this.level.update?.(dt, this.camera.position);

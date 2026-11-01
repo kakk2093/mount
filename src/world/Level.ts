@@ -60,6 +60,8 @@ export interface Level extends Ground {
 	readonly seat?: Seat;
 	/** Насыщенность картинки сейчас (0 — чёрно-белая, 1 — обычная); нет — обычная. */
 	saturation?(): number;
+	/** Уровень сам ставит глаза и взгляд каждый кадр (сцена от первого лица без управления взглядом). */
+	cameraPose?(): { position: THREE.Vector3; yaw: number; pitch: number };
 	/** Подсказка внизу экрана, когда рядом нет точки для E; null — нет. */
 	hint?(): string | null;
 	/** Картинка плывёт (0..1); нет — не плывёт. */
