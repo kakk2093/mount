@@ -3,6 +3,7 @@ import { Input } from './Input.js';
 import { PlayerController } from '../player/PlayerController.js';
 import { Footsteps } from '../audio/Footsteps.js';
 import { Sfx } from '../audio/Sfx.js';
+import { Music, type MusicMood } from '../audio/Music.js';
 import { PostProcess } from '../render/PostProcess.js';
 import { PLAYER_NAME, type Dialogue, type Interactable, type InteractionSound, type Voice } from './Interaction.js';
 import { DialogueBox } from '../ui/DialogueBox.js';
@@ -10,8 +11,8 @@ import { Letterbox, LETTERBOX_SLIDE_TIME } from '../ui/Letterbox.js';
 import { ObjectiveHud } from '../ui/ObjectiveHud.js';
 import { TargetMarker } from '../ui/TargetMarker.js';
 import { ProgressBar } from '../ui/ProgressBar.js';
-import type { Level, SpawnPoint } from '../world/Level.js';
-import { TestLevel } from '../world/TestLevel.js';
+import type { Level, LevelHost, SpawnPoint } from '../world/Level.js';
+import { Mountain } from '../world/mountain/Mountain.js';
 
 /** Во сколько раз буфер рендера меньше экрана — размер «пикселя». */
 const PIXEL_SIZE = 4;
@@ -30,6 +31,8 @@ const FLASH_COLOR = '#111111';
 const VOICE_PITCH: Record<Voice, number> = { player: 170, npc: 260, low: 120, high: 330 };
 /** Сколько длится сбой картинки и звука на глитч-хвосте реплики, с. */
 const GLITCH_TIME = 0.4;
+/** Настроение музыки, если уровень своего не задал. */
+const DEFAULT_MOOD: MusicMood = { volume: 1, brightness: 0.4 };
 /** Мысли героя на старте — когда сошла заливка. */
 const INTRO: Dialogue = {
 	lines: [
@@ -45,14 +48,15 @@ const INTRO: Dialogue = {
 export type Cutscene = (dt: number, time: number) => boolean;
 
 /** Композиция: рендерер, цикл, ресайз, уровни, диалоги, HUD. Содержимое мест — в классах уровней (world/). */
-export class Game {
+export class Game implements LevelHost {
 	private readonly renderer = new THREE.WebGLRenderer({ antialias: false });
-	readonly camera = new THREE.PerspectiveCamera(75, 1, 0.1, 200);
+	readonly camera = new THREE.PerspectiveCamera(75, 1, 0.1, 2000);
 	readonly post = new PostProcess(this.renderer);
 	private readonly timer = new THREE.Timer();
 	readonly input: Input;
 	readonly footsteps = new Footsteps();
 	readonly sfx = new Sfx();
+	readonly music = new Music();
 	private readonly dialogue = new DialogueBox();
 	readonly letterbox = new Letterbox();
 	private readonly objectiveHud = new ObjectiveHud();
@@ -86,10 +90,7 @@ export class Game {
 		document.body.appendChild(this.renderer.domElement);
 
 		this.input = new Input(this.renderer.domElement);
-		this.level = new TestLevel({
-			setObjective: (text) => this.setObjective(text),
-			startDialogue: (dialogue) => this.startDialogue(dialogue),
-		});
+		this.level = new Mountain(this);
 		this.player = new PlayerController(this.camera, this.input, this.level, this.level.colliders);
 		this.player.onStep = (loud) => this.footsteps.play(loud);
 		this._enter(this.level);
@@ -106,6 +107,8 @@ export class Game {
 				this.flash.style.background = FLASH_COLOR;
 				this.flashTime = FLASH_IN;
 				this.hint.textContent = 'Кликни, чтобы осмотреться';
+				// Музыка — с нажатия «Старт» (раньше браузер звук не даст) и на всю игру.
+				this.music.start();
 			},
 			{ once: true }
 		);
@@ -175,8 +178,10 @@ export class Game {
 		this.player.ground = level;
 		this.player.colliders = level.colliders;
 		this.player.rooted = false;
+		this.player.maxSlope = level.maxSlope ?? Infinity;
 		this.player.spawn(spawn.x, spawn.z, spawn.yaw);
 		this.objective = null;
+		this.post.setPalette(level.palette ?? null, undefined, level.paletteStrength);
 		level.enter?.();
 	}
 
@@ -193,6 +198,7 @@ export class Game {
 			if (!this.cutscene) this._clamp();
 			this.dialogue.update(dt);
 			this.level.update?.(dt, this.camera.position);
+			this.music.setMood(this.level.music?.() ?? DEFAULT_MOOD);
 			this._updateFlash(dt);
 			if (this.introPending && this.flashTime === null) {
 				this.introPending = false;

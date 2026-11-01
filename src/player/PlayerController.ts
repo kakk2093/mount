@@ -3,7 +3,8 @@ import type { Input } from '../core/Input.js';
 import type { Colliders } from '../physics/Colliders.js';
 
 const WALK_SPEED = 2.2;
-const SPRINT_SPEED = 4.5;
+/** Бег: пока x4 (18 м/с) — быстро проверять гору; потом вернуть 4.5. */
+const SPRINT_SPEED = 18;
 const EYE_HEIGHT = 1.7;
 const RADIUS = 0.35;
 const GRAVITY = 20;
@@ -27,9 +28,18 @@ const SHAKE_TIME = 0.35;
 const BOB_BLEND = 8;
 /** Как быстро взгляд доворачивается к цели в катсцене (1/с). */
 const LOOK_TURN = 3;
+/** Крутизну земли меряем по точкам на таком расстоянии вокруг, м. */
+const SLOPE_PROBE = 0.4;
+/** Уступ, на который можно шагнуть (или спрыгнуть) сверх уклона, м. */
+const STEP_UP = 0.35;
 
 export interface Ground {
 	getHeightAt(x: number, z: number): number;
+	/**
+	 * Крутизна в точке (тангенс), если земля знает её лучше обмера вокруг: например, на мосту обмер задел бы
+	 * пропасть за краем настила, а сам настил ровный.
+	 */
+	getSlopeAt?(x: number, z: number): number;
 }
 
 /** Контроллер от первого лица: WASD/Shift — движение, Space — прыжок, мышь — обзор. */
@@ -42,6 +52,11 @@ export class PlayerController {
 	rooted = false;
 	/** Можно ли прыгать. */
 	canJump = true;
+	/**
+	 * Самый крутой склон, на который можно ступить (тангенс: 1 — 45°); Infinity — без ограничения. Круче — не пускает
+	 * (и вверх, и вниз), с обрыва не шагнуть: на горе так держимся тропы.
+	 */
+	maxSlope = Infinity;
 	/** Вызывается на каждом шаге по земле; loud > 1 — бег или приземление. */
 	onStep: ((loud: number) => void) | null = null;
 	/** Направление взгляда в плоскости XZ (нормированное). */
@@ -157,6 +172,27 @@ export class PlayerController {
 		return this.ground.getHeightAt(x, z) + EYE_HEIGHT;
 	}
 
+	/** Можно ли перейти из (ax, az) в (bx, bz): нет обрыва между ними и там не круче maxSlope (или положе, чем здесь). */
+	private _canStep(ax: number, az: number, bx: number, bz: number): boolean {
+		if (this.maxSlope === Infinity) return true;
+		const d = Math.hypot(bx - ax, bz - az);
+		if (d < 1e-6) return true;
+		const { ground } = this;
+		if (Math.abs(ground.getHeightAt(bx, bz) - ground.getHeightAt(ax, az)) > STEP_UP + d * this.maxSlope) return false;
+		const slope = this._slopeAt(bx, bz);
+		return slope <= this.maxSlope || slope < this._slopeAt(ax, az);
+	}
+
+	/** Крутизна земли в точке (тангенс угла наклона). */
+	private _slopeAt(x: number, z: number): number {
+		const g = this.ground;
+		if (g.getSlopeAt) return g.getSlopeAt(x, z);
+		const e = SLOPE_PROBE;
+		const dx = g.getHeightAt(x + e, z) - g.getHeightAt(x - e, z);
+		const dz = g.getHeightAt(x, z + e) - g.getHeightAt(x, z - e);
+		return Math.hypot(dx, dz) / (2 * e);
+	}
+
 	/** Смещение глаз от покачивания сейчас (м): внизу — в момент шага, выше всего — в середине. */
 	private _bobY(): number {
 		return Math.abs(Math.sin(this.bobPhase)) * this.bobHeight * this.bobWeight;
@@ -235,6 +271,12 @@ export class PlayerController {
 		}
 
 		this.colliders.resolve(pos, RADIUS);
+		if (!this._canStep(startX, startZ, pos.x, pos.z)) {
+			// Упёрлись в крутизну — скользим вдоль неё: пробуем сдвиг только по X или только по Z.
+			if (this._canStep(startX, startZ, pos.x, startZ)) pos.z = startZ;
+			else if (this._canStep(startX, startZ, startX, pos.z)) pos.x = startX;
+			else pos.set(startX, pos.y, startZ);
+		}
 
 		// Шаги считаем по реально пройденному пути (упор в препятствие не даёт шагов).
 		const moved = Math.hypot(pos.x - startX, pos.z - startZ);

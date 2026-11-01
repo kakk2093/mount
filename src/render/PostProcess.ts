@@ -8,7 +8,15 @@ void main() {
 }
 `;
 
+/** Сколько раз в секунду меняется шумовое зерно по умолчанию. */
+const GRAIN_FPS = 24;
+/** Сила дизеринга по умолчанию: на целую ступень — при многих ступенях узор почти не виден, а ступени размывает. */
+const DITHER_AMOUNT = 1;
+/** Сколько цветов максимум в палитре. */
+const MAX_PALETTE = 32;
+
 const FRAGMENT = /* glsl */ `
+#define MAX_PALETTE ${MAX_PALETTE}
 uniform sampler2D tColor;
 uniform sampler2D tDepth;
 uniform vec2 resolution;
@@ -22,6 +30,16 @@ uniform float glitch;
 uniform float glitchSeed;
 uniform float wave;
 uniform float waveTime;
+uniform vec3 palette[MAX_PALETTE];
+uniform int paletteSize;
+uniform float paletteDither;
+uniform float paletteStrength;
+// 0 — дизеринг по матрице Байера (квадратный узор), 1 — шум (зерно; noiseSeed меняется — зерно «живёт»),
+// 2 — без дизеринга (ровные заливки).
+uniform int ditherMode;
+uniform float noiseSeed;
+// Сила дизеринга (и шума, и Байера): 1 — разброс на целую ступень цвета, меньше — слабее.
+uniform float ditherAmount;
 varying vec2 vUv;
 
 // Матрица Байера 4x4 для упорядоченного дизеринга.
@@ -101,9 +119,34 @@ void main() {
 
 	// Постеризация с дизерингом — в sRGB, чтобы ступени распределялись по восприятию, а не по линейной яркости.
 	vec3 s = pow(max(color, 0.0), vec3(1.0 / 2.2));
-	ivec2 p = ivec2(mod(gl_FragCoord.xy, 4.0));
-	float threshold = (BAYER[p.x + p.y * 4] + 0.5) / 16.0;
-	s = floor(s * (levels - 1.0) + threshold) / (levels - 1.0);
+	float threshold = 0.5;
+	if (ditherMode == 1) {
+		threshold = 0.5 + (hash(gl_FragCoord.xy + noiseSeed * vec2(37.0, 17.0)) - 0.5) * ditherAmount;
+	} else if (ditherMode == 0) {
+		ivec2 p = ivec2(mod(gl_FragCoord.xy, 4.0));
+		threshold = 0.5 + ((BAYER[p.x + p.y * 4] + 0.5) / 16.0 - 0.5) * ditherAmount;
+	}
+	if (paletteSize > 0) {
+		// Своя палитра: сдвигаем цвет порогом Байера и берём ближайший цвет палитры (разница по каналам
+		// взвешена: зелёный глаз различает лучше).
+		vec3 q = s + (threshold - 0.5) * paletteDither;
+		vec3 pick = palette[0];
+		float best = 1e9;
+		for (int i = 0; i < MAX_PALETTE; i++) {
+			if (i >= paletteSize) break;
+			vec3 d = q - palette[i];
+			float dist = dot(d * d, vec3(0.3, 0.45, 0.25));
+			if (dist < best) {
+				best = dist;
+				pick = palette[i];
+			}
+		}
+		// Не до конца: смесь с обычной постеризацией — палитра задаёт тон, но не съедает исходные цвета.
+		vec3 stepped = floor(s * (levels - 1.0) + threshold) / (levels - 1.0);
+		s = mix(stepped, pick, paletteStrength);
+	} else {
+		s = floor(s * (levels - 1.0) + threshold) / (levels - 1.0);
+	}
 
 	gl_FragColor = vec4(s, 1.0);
 }
@@ -120,17 +163,18 @@ export interface PostProcessOptions {
 
 /**
  * Пост-обработка: сцена рисуется в небольшой буфер, затем один проход даёт контуры по глубине,
- * виньетку и постеризацию цвета с упорядоченным дизерингом.
+ * виньетку и постеризацию цвета (по ступеням или в свою палитру) с дизерингом (шум, матрица Байера или без него).
  */
 export class PostProcess {
 	private readonly target: THREE.WebGLRenderTarget;
 	private readonly quadScene = new THREE.Scene();
 	private readonly quadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 	private readonly material: THREE.ShaderMaterial;
+	private grainFps = GRAIN_FPS;
 
 	constructor(
 		private readonly renderer: THREE.WebGLRenderer,
-		{ levels = 20, outline = 1, vignette = 0.5 }: PostProcessOptions = {}
+		{ levels = 48, outline = 1, vignette = 0.5 }: PostProcessOptions = {}
 	) {
 		this.target = new THREE.WebGLRenderTarget(1, 1, {
 			minFilter: THREE.NearestFilter,
@@ -158,6 +202,13 @@ export class PostProcess {
 				glitchSeed: { value: 0 },
 				wave: { value: 0 },
 				waveTime: { value: 0 },
+				palette: { value: Array.from({ length: MAX_PALETTE }, () => new THREE.Vector3()) },
+				paletteSize: { value: 0 },
+				paletteDither: { value: 0.12 },
+				paletteStrength: { value: 1 },
+				ditherMode: { value: 0 },
+				noiseSeed: { value: 0 },
+				ditherAmount: { value: DITHER_AMOUNT },
 			},
 		});
 		this.quadScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.material));
@@ -186,7 +237,40 @@ export class PostProcess {
 		this.material.uniforms.waveTime.value = time;
 	}
 
+	/**
+	 * Своя палитра вместо постеризации по ступеням: каждый пиксель — ближайший из этих цветов (sRGB, '#rrggbb'),
+	 * с дизерингом силы dither; strength 0..1 — насколько сильно (меньше 1 — смесь с обычной постеризацией).
+	 * null — обычная постеризация (levels).
+	 */
+	setPalette(colors: string[] | null, dither = 0.12, strength = 1): void {
+		const uniforms = this.material.uniforms;
+		const list = (colors ?? []).slice(0, MAX_PALETTE);
+		list.forEach((hex, i) => {
+			// Без THREE.Color: он перевёл бы цвет в линейное пространство, а сравниваем в sRGB.
+			const n = parseInt(hex.replace('#', ''), 16);
+			uniforms.palette.value[i].set(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255);
+		});
+		uniforms.paletteSize.value = list.length;
+		uniforms.paletteDither.value = dither;
+		uniforms.paletteStrength.value = strength;
+	}
+
+	/**
+	 * Дизеринг: 'bayer' — матрица Байера (квадратный узор, по умолчанию), 'noise' — шум (зерно, как на плёнке),
+	 * 'none' — нет (ровные заливки, но плавные переходы ложатся кругами-ступенями).
+	 * amount — сила 0..1 (на сколько ступени цвета разброс); grainFps — сколько раз в секунду меняется шум
+	 * (0 — неподвижный).
+	 */
+	setDither(mode: 'none' | 'noise' | 'bayer', amount = DITHER_AMOUNT, grainFps = GRAIN_FPS): void {
+		this.material.uniforms.ditherMode.value = mode === 'none' ? 2 : mode === 'noise' ? 1 : 0;
+		this.material.uniforms.ditherAmount.value = amount;
+		this.grainFps = grainFps;
+	}
+
 	render(scene: THREE.Scene, camera: THREE.PerspectiveCamera): void {
+		// Зерно обновляется с частотой плёнки, а не каждый кадр — иначе рябит. Сид небольшой: у hash на sin большие
+		// аргументы теряют точность и шум полосит.
+		if (this.grainFps > 0) this.material.uniforms.noiseSeed.value = Math.floor((performance.now() / 1000) * this.grainFps) % 64;
 		this.material.uniforms.cameraNear.value = camera.near;
 		this.material.uniforms.cameraFar.value = camera.far;
 
