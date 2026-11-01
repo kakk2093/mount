@@ -3,6 +3,8 @@ import { Colliders } from '../../physics/Colliders.js';
 import { PLAYER_NAME, type Dialogue, type Interactable } from '../../core/Interaction.js';
 import type { Bounds, Level, LevelHost, SpawnPoint } from '../Level.js';
 import type { MusicMood } from '../../audio/Music.js';
+import { FireSound } from '../../audio/FireSound.js';
+import { WindSound } from '../../audio/WindSound.js';
 import { Sky, type SkyLook } from '../Sky.js';
 import { Snow } from '../Snow.js';
 import { MemoryLevel } from '../MemoryLevel.js';
@@ -10,7 +12,7 @@ import { GeometryBatch } from '../props/GeometryBatch.js';
 import * as P from '../props/Props.js';
 import { createNoise2D, createRng } from '../../utils/random.js';
 import { MountainShape, PATH_HALF_WIDTH, PATH_START_RADIUS, PEAK_HEIGHT } from './MountainShape.js';
-import { MountainTerrain } from './MountainTerrain.js';
+import { MountainTerrain, TERRAIN_HALF } from './MountainTerrain.js';
 import { Bridge } from './Bridge.js';
 import { Campfire } from './Campfire.js';
 import { Clouds } from './Clouds.js';
@@ -180,6 +182,7 @@ export class Mountain implements Level {
 	readonly colliders = new Colliders();
 	readonly interactables: Interactable[] = [];
 	readonly maxSlope = MAX_SLOPE;
+	readonly surface = 'snow';
 	readonly shape = new MountainShape(SEED);
 	private readonly terrain: MountainTerrain;
 	private readonly bridges: Bridge[];
@@ -197,6 +200,8 @@ export class Mountain implements Level {
 	private readonly hemi = new THREE.HemisphereLight();
 	/** Ключевой свет с тенями: ночью — луна, к вершине — солнце. */
 	private readonly key = new THREE.DirectionalLight();
+	private readonly fireSound = new FireSound();
+	private readonly windSound = new WindSound();
 	private readonly snow = new Snow(new THREE.Vector3(0, 0, SPAWN_Z));
 	/** Выше этой высоты снег не идёт (предпоследний костёр). */
 	private snowStopY = Infinity;
@@ -232,13 +237,22 @@ export class Mountain implements Level {
 		this.bridges = shape.gullies.map((g) => new Bridge(shape.path, g.bridgeStart - BRIDGE_LANDING, g.bridgeEnd + BRIDGE_LANDING));
 
 		this.scene.fog = this.fog;
-		// Равнина до горизонта — чуть ниже края сетки земли (там рельеф сходит на нет), без пропсов.
-		const plain = new THREE.Mesh(
-			new THREE.PlaneGeometry(PLAIN_SIZE, PLAIN_SIZE),
-			new THREE.MeshStandardMaterial({ color: '#cdd6e2', roughness: 1 })
-		);
+		// Равнина до горизонта, без пропсов: квадрат с дырой под сеткой земли (иначе перекрыла бы холмы ниже нуля
+		// у подножия). На краю сетки рельеф сходит к нулю — стык без ступеньки.
+		const outline = new THREE.Shape();
+		outline.moveTo(-PLAIN_SIZE / 2, -PLAIN_SIZE / 2);
+		outline.lineTo(PLAIN_SIZE / 2, -PLAIN_SIZE / 2);
+		outline.lineTo(PLAIN_SIZE / 2, PLAIN_SIZE / 2);
+		outline.lineTo(-PLAIN_SIZE / 2, PLAIN_SIZE / 2);
+		const hole = new THREE.Path();
+		const h = TERRAIN_HALF;
+		hole.moveTo(-h, -h);
+		hole.lineTo(-h, h);
+		hole.lineTo(h, h);
+		hole.lineTo(h, -h);
+		outline.holes.push(hole);
+		const plain = new THREE.Mesh(new THREE.ShapeGeometry(outline), new THREE.MeshStandardMaterial({ color: '#cdd6e2', roughness: 1 }));
 		plain.rotation.x = -Math.PI / 2;
-		plain.position.y = -0.05;
 		plain.receiveShadow = true;
 		this.scene.add(this.sky.group, this.terrain.mesh, plain, this.clouds.group, this.snow.points, this.hemi);
 		for (const bridge of this.bridges) this.scene.add(bridge.mesh);
@@ -278,6 +292,11 @@ export class Mountain implements Level {
 		return this.terrain.getHeightAt(x, z);
 	}
 
+	leave(): void {
+		this.fireSound.update(Infinity);
+		this.windSound.update(0);
+	}
+
 	/** На мосту — ровно (с края не даёт шагнуть проверка обрыва), иначе — по земле вокруг (как в PlayerController). */
 	getSlopeAt(x: number, z: number): number {
 		if (this.bridges.some((b) => b.heightAt(x, z) !== null)) return 0;
@@ -298,12 +317,20 @@ export class Mountain implements Level {
 		this.sky.update(player);
 		this.clouds.update(dt, player, this.weather.clouds);
 		this.snow.update(dt, player, this.weather.wind);
-		// После предпоследнего костра снег не идёт совсем.
-		this.snow.setDensity(this.weather.snow * (1 - THREE.MathUtils.smoothstep(player.y, this.snowStopY - 8, this.snowStopY)));
+		// После последнего костра снег не идёт совсем; метель звучит так же, как идёт снег.
+		const snowfall = this.weather.snow * (1 - THREE.MathUtils.smoothstep(player.y, this.snowStopY - 8, this.snowStopY));
+		this.snow.setDensity(snowfall);
+		this.windSound.update(snowfall);
 		// Ключевой свет с тенями — следует за игроком.
 		this.key.target.position.copy(player);
 		this.key.position.copy(player).addScaledVector(this.keyDir, 80);
-		for (const fire of this.fires) fire.update(this.time);
+		// Костры: огонь и звук ближайшего.
+		let nearest = Infinity;
+		for (const fire of this.fires) {
+			fire.update(this.time, dt);
+			nearest = Math.min(nearest, player.distanceTo(fire.flame));
+		}
+		this.fireSound.update(nearest);
 		// Дошли до смотровой (после всех костров) — финал: задачи больше нет, музыка в полную силу.
 		if (!this.finale && this.nextFire >= this.fires.length && Math.hypot(player.x - this.summit.x, player.z - this.summit.z) < SUMMIT_REACH) {
 			this.finale = true;

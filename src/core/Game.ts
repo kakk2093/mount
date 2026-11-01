@@ -179,6 +179,7 @@ export class Game implements LevelHost {
 		this.player.colliders = level.colliders;
 		this.player.rooted = false;
 		this.player.maxSlope = level.maxSlope ?? Infinity;
+		this.footsteps.surface = level.surface ?? 'hard';
 		this.player.spawn(spawn.x, spawn.z, spawn.yaw);
 		this.objective = null;
 		this.post.setPalette(level.palette ?? null, undefined, level.paletteStrength);

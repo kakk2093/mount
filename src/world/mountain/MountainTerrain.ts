@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import type { MountainShape } from './MountainShape.js';
 
 /** Земля — квадрат ±HALF м с шагом сетки STEP м. */
-const HALF = 330;
+export const TERRAIN_HALF = 330;
+const HALF = TERRAIN_HALF;
 const STEP = 1.5;
 const SNOW = new THREE.Color('#cdd6e2');
 const ROCK = new THREE.Color('#3d4149');

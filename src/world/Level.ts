@@ -3,6 +3,7 @@ import type { Colliders } from '../physics/Colliders.js';
 import type { Dialogue, Interactable } from '../core/Interaction.js';
 import type { Ground } from '../player/PlayerController.js';
 import type { MusicMood } from '../audio/Music.js';
+import type { Surface } from '../audio/Footsteps.js';
 
 export interface Bounds {
 	minX: number;
@@ -39,6 +40,8 @@ export interface Level extends Ground {
 	readonly palette?: string[];
 	/** Насколько сильно палитра (0..1, по умолчанию 1). */
 	readonly paletteStrength?: number;
+	/** По чему звучат шаги; нет — по твёрдому. */
+	readonly surface?: Surface;
 	/** Самый крутой склон, на который можно ступить (тангенс); нет — без ограничения. */
 	readonly maxSlope?: number;
 	/** Что можно сделать по E; Game показывает подсказку для ближайшей доступной точки. */
